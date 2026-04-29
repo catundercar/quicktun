@@ -146,3 +146,108 @@ func backendToProto(b model.Backend) quicktunv1.Backend {
 	}
 	return quicktunv1.Backend_BACKEND_UNSPECIFIED
 }
+
+// CreateProject implements quicktunv1.ProjectServiceServer.
+func (s *ProjectService) CreateProject(ctx context.Context, req *quicktunv1.CreateProjectRequest) (*quicktunv1.Project, error) {
+	op := auth.OperatorFromContext(ctx)
+	if op == nil {
+		return nil, status.Error(codes.Unauthenticated, "not authenticated")
+	}
+	if !op.IsAdmin {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
+	if req.GetProject() == nil {
+		return nil, status.Error(codes.InvalidArgument, "project body is required")
+	}
+	if err := resource.ValidateSlug(req.GetProjectId()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if req.Project.GetDisplayName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "project.display_name is required")
+	}
+	if req.Project.GetRelayPortRange() == "" {
+		return nil, status.Error(codes.InvalidArgument, "project.relay_port_range is required")
+	}
+
+	row := &model.Project{
+		Slug:           req.ProjectId,
+		Name:           req.Project.DisplayName,
+		RelayPortRange: req.Project.RelayPortRange,
+		DefaultMode:    siteModeFromProto(req.Project.DefaultMode),
+		Backend:        backendFromProto(req.Project.Backend),
+		Status:         model.ProjectStatusActive,
+	}
+	if row.DefaultMode == "" {
+		row.DefaultMode = model.SiteModeEndpoint
+	}
+	if row.Backend == "" {
+		row.Backend = model.BackendRathole
+	}
+
+	if _, err := s.projects.Create(ctx, row); err != nil {
+		// SQLite returns "UNIQUE constraint failed: projects.slug" on dup.
+		if isUniqueConstraintErr(err) {
+			return nil, status.Error(codes.AlreadyExists, "project slug already exists")
+		}
+		return nil, status.Error(codes.Internal, "create failed")
+	}
+
+	if err := s.audit.Log(ctx, audit.Entry{
+		ProjectID: ptrUint64(row.ID),
+		Action:    "project.create",
+		Target:    resource.FormatProjectName(row.Slug),
+		Extra: map[string]any{
+			"display_name":     row.Name,
+			"relay_port_range": row.RelayPortRange,
+		},
+	}); err != nil {
+		// Audit failure is non-fatal — log but do not unwind the create.
+		// Production would emit a metric here; Phase 1 swallows.
+		_ = err
+	}
+
+	return projectToProto(row), nil
+}
+
+func siteModeFromProto(m quicktunv1.SiteMode) model.SiteMode {
+	switch m {
+	case quicktunv1.SiteMode_SITE_MODE_ENDPOINT:
+		return model.SiteModeEndpoint
+	case quicktunv1.SiteMode_SITE_MODE_SUBNET:
+		return model.SiteModeSubnet
+	}
+	return ""
+}
+
+func backendFromProto(b quicktunv1.Backend) model.Backend {
+	switch b {
+	case quicktunv1.Backend_BACKEND_RATHOLE:
+		return model.BackendRathole
+	case quicktunv1.Backend_BACKEND_NETBIRD:
+		return model.BackendNetbird
+	}
+	return ""
+}
+
+func ptrUint64(v uint64) *uint64 { return &v }
+
+func isUniqueConstraintErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strContains(msg, "UNIQUE constraint failed") ||
+		strContains(msg, "unique constraint")
+}
+
+func strContains(s, substr string) bool {
+	if len(substr) == 0 {
+		return true
+	}
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
