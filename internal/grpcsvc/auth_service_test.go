@@ -98,7 +98,7 @@ func TestWhoAmIReturnsCallerOperator(t *testing.T) {
 	op := seedOperator(t, db, "wa@x.com", "h", false)
 	svc := newAuthService(t, db)
 
-	ctx := context.WithValue(context.Background(), auth.OperatorContextKey(), op)
+	ctx := auth.WithOperator(context.Background(), op)
 	resp, err := svc.WhoAmI(ctx, &quicktunv1.WhoAmIRequest{})
 	require.NoError(t, err)
 	require.Equal(t, "wa@x.com", resp.Operator.Email)
@@ -115,9 +115,9 @@ func TestLogoutRevokesSession(t *testing.T) {
 	// Simulate the interceptor having put the operator on context.
 	op, err := dao.NewSessionDAO(db).Validate(context.Background(), loginResp.AccessToken)
 	require.NoError(t, err)
-	ctx := context.WithValue(context.Background(), auth.OperatorContextKey(), op)
-	// Provide raw token via metadata so service knows what to revoke.
-	ctx = grpcsvc.WithRawToken(ctx, loginResp.AccessToken)
+	ctx := auth.WithOperator(context.Background(), op)
+	// Provide raw token via context so service knows what to revoke.
+	ctx = auth.WithRawToken(ctx, loginResp.AccessToken)
 
 	_, err = svc.Logout(ctx, &quicktunv1.LogoutRequest{})
 	require.NoError(t, err)
@@ -132,7 +132,7 @@ func TestLogoutWithoutTokenIsNoop(t *testing.T) {
 	op := seedOperator(t, db, "no@x.com", "h", false)
 	svc := newAuthService(t, db)
 
-	ctx := context.WithValue(context.Background(), auth.OperatorContextKey(), op)
+	ctx := auth.WithOperator(context.Background(), op)
 	_, err := svc.Logout(ctx, &quicktunv1.LogoutRequest{})
 	// Without a raw token in context, RevokeByToken is a no-op; this should
 	// still succeed (idempotent).

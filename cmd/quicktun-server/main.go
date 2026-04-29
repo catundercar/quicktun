@@ -2,13 +2,10 @@
 //
 // Subcommands:
 //
-//	migrate   apply pending SQL migrations
-//	version   print build version and exit
-//
-// Future subcommands (Phase 1 milestones):
-//
 //	serve     run the gRPC + grpc-gateway server
-//	admin     create / list operators
+//	migrate   apply pending SQL migrations
+//	admin     administrative commands (create-operator, ...)
+//	version   print build version and exit
 package main
 
 import (

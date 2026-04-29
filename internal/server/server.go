@@ -141,7 +141,8 @@ func gatewayErrorHandler(ctx context.Context, mux *runtime.ServeMux, marshaler r
 
 	w.Header().Set("Content-Type", "application/json")
 	if s.Code() == codes.Unauthenticated {
-		w.Header().Set("WWW-Authenticate", s.Message())
+		// RFC 9110 §11.6.1: WWW-Authenticate must name an auth scheme.
+		w.Header().Set("WWW-Authenticate", `Bearer realm="quicktun"`)
 	}
 	w.WriteHeader(httpStatus)
 

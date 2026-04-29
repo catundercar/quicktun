@@ -49,6 +49,9 @@ func (d *OperatorDAO) FindByID(ctx context.Context, id uint64) (*model.Operator,
 // SessionDAO encapsulates session create / validate / revoke.
 type SessionDAO struct{ db *gorm.DB }
 
+// compile-time assertion that *SessionDAO satisfies auth.Validator.
+var _ auth.Validator = (*SessionDAO)(nil)
+
 // NewSessionDAO constructs a SessionDAO bound to db.
 func NewSessionDAO(db *gorm.DB) *SessionDAO { return &SessionDAO{db: db} }
 

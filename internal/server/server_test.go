@@ -112,7 +112,16 @@ func TestServerWhoAmIRequiresAuth(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx)
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(2 * time.Second):
+			t.Log("server did not stop cleanly")
+		}
+	})
 	require.Eventually(t, func() bool {
 		c, err := net.DialTimeout("tcp", grpcAddr, 100*time.Millisecond)
 		if err != nil {

@@ -31,35 +31,6 @@ func NewAuthService(ops *dao.OperatorDAO, sessions *dao.SessionDAO, sessionTTL t
 	return &AuthService{ops: ops, sessions: sessions, ttl: sessionTTL}
 }
 
-// rawTokenCtxKey carries the raw bearer token through context so Logout can
-// revoke the calling session without re-parsing metadata.
-type rawTokenCtxKey struct{}
-
-// WithRawToken attaches a raw bearer token to ctx. Used by the auth
-// interceptor (after extraction) and by tests.
-func WithRawToken(ctx context.Context, raw string) context.Context {
-	return context.WithValue(ctx, rawTokenCtxKey{}, raw)
-}
-
-func rawTokenFromContext(ctx context.Context) string {
-	v, _ := ctx.Value(rawTokenCtxKey{}).(string)
-	if v != "" {
-		return v
-	}
-	// Fall back to metadata if interceptor didn't pre-stash it.
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return ""
-	}
-	for _, h := range md.Get("authorization") {
-		const prefix = "Bearer "
-		if len(h) > len(prefix) && h[:len(prefix)] == prefix {
-			return h[len(prefix):]
-		}
-	}
-	return ""
-}
-
 // Login implements quicktunv1.AuthServiceServer.
 func (s *AuthService) Login(ctx context.Context, req *quicktunv1.LoginRequest) (*quicktunv1.LoginResponse, error) {
 	if req.GetEmail() == "" || req.GetPassword() == "" {
@@ -68,7 +39,6 @@ func (s *AuthService) Login(ctx context.Context, req *quicktunv1.LoginRequest) (
 	op, err := s.ops.FindByEmail(ctx, req.Email)
 	if err != nil {
 		if dao.IsNotFound(err) {
-			// Mask "no such email" as "invalid credentials" — don't leak existence.
 			return nil, status.Error(codes.Unauthenticated, "invalid credentials")
 		}
 		return nil, status.Error(codes.Internal, "lookup failed")
@@ -90,15 +60,13 @@ func (s *AuthService) Login(ctx context.Context, req *quicktunv1.LoginRequest) (
 	}, nil
 }
 
-// Logout implements quicktunv1.AuthServiceServer.
-//
-// Phase 1 ignores LogoutRequest.session_name (admin path; will land later)
-// and revokes the caller's current session.
+// Logout implements quicktunv1.AuthServiceServer. Phase 1 ignores
+// LogoutRequest.session_name and revokes the caller's current session.
 func (s *AuthService) Logout(ctx context.Context, _ *quicktunv1.LogoutRequest) (*emptypb.Empty, error) {
 	if auth.OperatorFromContext(ctx) == nil {
 		return nil, status.Error(codes.Unauthenticated, "not authenticated")
 	}
-	if raw := rawTokenFromContext(ctx); raw != "" {
+	if raw := auth.RawTokenFromContext(ctx); raw != "" {
 		if err := s.sessions.RevokeByToken(ctx, raw); err != nil {
 			return nil, status.Error(codes.Internal, "revoke failed")
 		}

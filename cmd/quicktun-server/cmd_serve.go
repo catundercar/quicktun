@@ -12,6 +12,7 @@ import (
 	"github.com/tulip/quicktun/internal/config"
 	"github.com/tulip/quicktun/internal/dao"
 	"github.com/tulip/quicktun/internal/logger"
+	"github.com/tulip/quicktun/internal/migration"
 	"github.com/tulip/quicktun/internal/server"
 )
 
@@ -33,6 +34,13 @@ func serveCmd() *cobra.Command {
 				return fmt.Errorf("serve: %w", err)
 			}
 			defer lg.Sync()
+
+			// Apply any pending migrations before opening the gorm pool. Idempotent
+			// when schema is already up to date. Without this, a fresh deploy fails
+			// at first request with confusing "no such table" errors.
+			if err := migration.Up(cfg.Database.DSN); err != nil {
+				return fmt.Errorf("serve: migrate: %w", err)
+			}
 
 			db, err := dao.Open(cfg.Database.DSN, lg)
 			if err != nil {
