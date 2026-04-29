@@ -13,5 +13,6 @@ func AllModels() []any {
 		&OperatorProjectAccess{},
 		&Site{},
 		&SiteAgentToken{},
+		&Service{},
 	}
 }

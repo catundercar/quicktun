@@ -27,7 +27,7 @@ type Site struct {
 	AgentVersion string     `gorm:"not null;size:32" json:"agent_version"`
 
 	Project    Project        `gorm:"foreignKey:ProjectID" json:"-"`
-	// Services []Service `gorm:"foreignKey:SiteID" json:"-"` // TODO: re-enable in Task 5
+	Services   []Service      `gorm:"foreignKey:SiteID" json:"-"`
 	AgentToken SiteAgentToken `gorm:"foreignKey:SiteID" json:"-"`
 }
 
