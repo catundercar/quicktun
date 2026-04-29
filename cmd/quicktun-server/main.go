@@ -32,6 +32,7 @@ func main() {
 	root.AddCommand(versionCmd())
 	root.AddCommand(migrateCmd())
 	root.AddCommand(serveCmd())
+	root.AddCommand(adminCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
