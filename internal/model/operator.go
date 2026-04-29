@@ -10,7 +10,7 @@ type Operator struct {
 	IsAdmin      bool   `gorm:"not null;default:false" json:"is_admin"`
 
 	Sessions []OperatorSession `gorm:"foreignKey:OperatorID" json:"-"`
-	// ProjectAccess []OperatorProjectAccess `gorm:"foreignKey:OperatorID" json:"-"` // TODO: re-enable in Task 3
+	ProjectAccess []OperatorProjectAccess `gorm:"foreignKey:OperatorID" json:"-"`
 }
 
 // OperatorSession is one logged-in bearer token (8h default TTL).

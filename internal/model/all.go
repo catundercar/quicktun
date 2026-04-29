@@ -9,5 +9,7 @@ func AllModels() []any {
 	return []any{
 		&Operator{},
 		&OperatorSession{},
+		&Project{},
+		&OperatorProjectAccess{},
 	}
 }
