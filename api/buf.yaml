@@ -1,11 +1,14 @@
 version: v2
 modules:
   - path: .
+deps:
+  - buf.build/googleapis/googleapis
 lint:
   use:
     - STANDARD
   except:
     - PACKAGE_VERSION_SUFFIX
+    - RPC_RESPONSE_STANDARD_NAME
 breaking:
   use:
     - FILE

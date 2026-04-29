@@ -1,0 +1,24 @@
+// Common types shared across the quicktun v1 API.
+syntax = "proto3";
+
+package quicktun.v1;
+
+option go_package = "github.com/tulip/quicktun/gen/go/quicktun/v1;quicktunv1";
+
+// PageRequest are the standard pagination input fields (Google AIP-158).
+message PageRequest {
+  // Maximum results per page. Default 50, max 1000.
+  int32 page_size = 1;
+
+  // Token returned by previous call's PageResponse.next_page_token.
+  string page_token = 2;
+}
+
+// PageResponse are the standard pagination output fields.
+message PageResponse {
+  // Token to pass to the next page; empty when no more pages remain.
+  string next_page_token = 1;
+
+  // Optional total count; servers may omit when expensive to compute.
+  int32 total_size = 2;
+}

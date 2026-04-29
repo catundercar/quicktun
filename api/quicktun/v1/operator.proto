@@ -1,0 +1,27 @@
+// Operator (control plane user) data shapes.
+//
+// In Phase 1 there is no full OperatorService — operators are seeded via the
+// `quicktun-server admin create-operator` CLI. The Operator message itself is
+// referenced from AuthService.WhoAmI, so it lives here.
+syntax = "proto3";
+
+package quicktun.v1;
+
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/tulip/quicktun/gen/go/quicktun/v1;quicktunv1";
+
+// Operator is one team member with control-plane access.
+message Operator {
+  // Resource name. Format: operators/{operator}
+  string name = 1;
+
+  // Output only.
+  string operator_id = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp create_time = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Mutable.
+  string email    = 10 [(google.api.field_behavior) = REQUIRED];
+  bool   is_admin = 11;
+}
