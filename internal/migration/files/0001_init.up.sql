@@ -83,7 +83,7 @@ CREATE TABLE services (
     target_addr  TEXT    NOT NULL,
     target_port  INTEGER NOT NULL,
     proto        TEXT    NOT NULL DEFAULT 'tcp',
-    relay_port   INTEGER,
+    relay_port   INTEGER,                   -- NULL until allocator assigns one
     created_at   DATETIME NOT NULL,
     updated_at   DATETIME NOT NULL,
     deleted_at   DATETIME

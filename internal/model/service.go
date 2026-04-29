@@ -19,5 +19,5 @@ type Service struct {
 	TargetAddr string `gorm:"not null;size:64" json:"target_addr"`
 	TargetPort uint16 `gorm:"not null" json:"target_port"`
 	Proto      Proto  `gorm:"not null;default:'tcp';size:8" json:"proto"`
-	RelayPort  uint16 `gorm:"index" json:"relay_port"`
+	RelayPort  *uint16 `gorm:"index" json:"relay_port,omitempty"`
 }
