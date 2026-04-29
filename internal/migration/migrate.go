@@ -17,8 +17,10 @@ import (
 // Up applies every pending migration against the SQLite database at dsn.
 // Idempotent: returns nil if no migrations are pending.
 //
-// dsn is in golang-migrate sqlite3 form, e.g. "file:/path/to/qt.db" — without
-// gorm's PRAGMA query string. Translation from a gorm DSN happens in the caller.
+// dsn is the sqlite filename DSN from config (it may include pragma query
+// params like ?_journal_mode=WAL&_foreign_keys=on; golang-migrate's sqlite3
+// driver passes them through to the underlying driver). The "sqlite3://"
+// scheme prefix is added internally.
 func Up(dsn string) error {
 	m, err := newMigrator(dsn)
 	if err != nil {

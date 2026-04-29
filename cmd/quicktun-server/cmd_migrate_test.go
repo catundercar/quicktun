@@ -34,7 +34,7 @@ log:
 
 	require.NoError(t, cmd.RunE(cmd, nil))
 
-	db, err := dao.Open(dbPath)
+	db, err := dao.Open(dbPath, nil)
 	require.NoError(t, err)
 	var n int
 	require.NoError(t, db.Raw(

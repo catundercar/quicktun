@@ -63,3 +63,30 @@ func TestLoadFailsOnMissingFile(t *testing.T) {
 	_, err := config.Load("/no/such/file.yaml")
 	require.Error(t, err)
 }
+
+func TestValidateRejectsEmptyDSN(t *testing.T) {
+	yaml := `
+database:
+  driver: sqlite
+`
+	path := filepath.Join(t.TempDir(), "server.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o600))
+
+	_, err := config.Load(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "database.dsn is required")
+}
+
+func TestValidateRejectsBadDriver(t *testing.T) {
+	yaml := `
+database:
+  driver: postgres
+  dsn: "host=localhost"
+`
+	path := filepath.Join(t.TempDir(), "server.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o600))
+
+	_, err := config.Load(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "only sqlite driver supported")
+}

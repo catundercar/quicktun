@@ -10,7 +10,7 @@ import (
 )
 
 func TestOpenInMemory(t *testing.T) {
-	db, err := dao.Open("file::memory:?cache=shared")
+	db, err := dao.Open("file::memory:?cache=shared", nil)
 	require.NoError(t, err)
 	require.NotNil(t, db)
 	sqlDB, err := db.DB()
@@ -22,7 +22,7 @@ func TestOpenFileWithWAL(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "test.db")
 	dsn := "file:" + tmp + "?_journal_mode=WAL&_busy_timeout=5000"
 
-	db, err := dao.Open(dsn)
+	db, err := dao.Open(dsn, nil)
 	require.NoError(t, err)
 
 	var mode string

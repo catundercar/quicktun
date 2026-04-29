@@ -16,7 +16,7 @@ func TestUpAppliesAllTables(t *testing.T) {
 
 	require.NoError(t, migration.Up(dsn))
 
-	db, err := dao.Open(dsn)
+	db, err := dao.Open(dsn, nil)
 	require.NoError(t, err)
 
 	wanted := []string{
@@ -49,7 +49,7 @@ func TestDownDropsAllTables(t *testing.T) {
 	require.NoError(t, migration.Up(dsn))
 	require.NoError(t, migration.Down(dsn))
 
-	db, err := dao.Open(dsn)
+	db, err := dao.Open(dsn, nil)
 	require.NoError(t, err)
 	var count int
 	require.NoError(t, db.Raw(

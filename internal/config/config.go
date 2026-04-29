@@ -74,7 +74,32 @@ func Load(path string) (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("config: unmarshal: %w", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+// Validate returns an error if any required field is missing or malformed.
+// Called immediately after Load to fail fast at process startup rather than
+// surfacing config bugs at first use.
+func (c *Config) Validate() error {
+	if c.Database.Driver == "" {
+		return fmt.Errorf("config: database.driver is required")
+	}
+	if c.Database.Driver != "sqlite" {
+		return fmt.Errorf("config: only sqlite driver supported in Phase 1, got %q", c.Database.Driver)
+	}
+	if c.Database.DSN == "" {
+		return fmt.Errorf("config: database.dsn is required")
+	}
+	if c.ControlPlane.GRPCListen == "" {
+		return fmt.Errorf("config: control_plane.grpc_listen is required")
+	}
+	if c.Session.DefaultTTL <= 0 {
+		return fmt.Errorf("config: session.default_ttl must be positive")
+	}
+	return nil
 }
 
 func setDefaults(v *viper.Viper) {
