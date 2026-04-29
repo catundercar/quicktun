@@ -14,5 +14,6 @@ func AllModels() []any {
 		&Site{},
 		&SiteAgentToken{},
 		&Service{},
+		&AuditLog{},
 	}
 }
