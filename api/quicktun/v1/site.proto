@@ -1,0 +1,142 @@
+// SiteService — CRUD for sites (bastion machines inside a project).
+syntax = "proto3";
+
+package quicktun.v1;
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+
+import "quicktun/v1/common.proto";
+import "quicktun/v1/project.proto";
+
+option go_package = "github.com/tulip/quicktun/gen/go/quicktun/v1;quicktunv1";
+
+service SiteService {
+  rpc ListSites(ListSitesRequest) returns (ListSitesResponse) {
+    option (google.api.http) = {
+      get: "/v1/{parent=projects/*}/sites"
+    };
+  }
+
+  rpc GetSite(GetSiteRequest) returns (Site) {
+    option (google.api.http) = {
+      get: "/v1/{name=projects/*/sites/*}"
+    };
+  }
+
+  rpc CreateSite(CreateSiteRequest) returns (Site) {
+    option (google.api.http) = {
+      post: "/v1/{parent=projects/*}/sites"
+      body: "site"
+    };
+  }
+
+  rpc UpdateSite(UpdateSiteRequest) returns (Site) {
+    option (google.api.http) = {
+      patch: "/v1/{site.name=projects/*/sites/*}"
+      body: "site"
+    };
+  }
+
+  rpc DeleteSite(DeleteSiteRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/v1/{name=projects/*/sites/*}"
+    };
+  }
+
+  // Custom: rotate the site's agent token (returns the new raw token once).
+  rpc RotateSiteAgentToken(RotateSiteAgentTokenRequest) returns (RotateSiteAgentTokenResponse) {
+    option (google.api.http) = {
+      post: "/v1/{name=projects/*/sites/*}:rotateAgentToken"
+      body: "*"
+    };
+  }
+
+  // Custom: produce a one-line install command operators paste on a bastion.
+  rpc GetSiteInstallCommand(GetSiteInstallCommandRequest) returns (GetSiteInstallCommandResponse) {
+    option (google.api.http) = {
+      get: "/v1/{name=projects/*/sites/*}:installCommand"
+    };
+  }
+}
+
+enum SiteStatus {
+  SITE_STATUS_UNSPECIFIED = 0;
+  SITE_STATUS_PENDING     = 1;
+  SITE_STATUS_ONLINE      = 2;
+  SITE_STATUS_OFFLINE     = 3;
+}
+
+message Site {
+  // Resource name. Format: projects/{p}/sites/{s}
+  string name = 1;
+
+  string site_id = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp create_time = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp update_time = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  string display_name = 10 [(google.api.field_behavior) = REQUIRED];
+  SiteMode mode       = 11;
+  Backend backend     = 12;
+  repeated string lan_cidrs = 13;
+
+  // Output only.
+  SiteStatus status        = 20 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp last_seen_time = 21 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string hostname          = 22 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string os                = 23 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string agent_version     = 24 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+message ListSitesRequest {
+  string parent = 1 [(google.api.field_behavior) = REQUIRED];
+  PageRequest page = 2;
+}
+
+message ListSitesResponse {
+  repeated Site sites = 1;
+  PageResponse page = 2;
+}
+
+message GetSiteRequest {
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CreateSiteRequest {
+  string parent = 1 [(google.api.field_behavior) = REQUIRED];
+  string site_id = 2 [(google.api.field_behavior) = REQUIRED];
+  Site site = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message UpdateSiteRequest {
+  Site site = 1 [(google.api.field_behavior) = REQUIRED];
+  google.protobuf.FieldMask update_mask = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+message DeleteSiteRequest {
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+  bool force = 2;
+}
+
+message RotateSiteAgentTokenRequest {
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message RotateSiteAgentTokenResponse {
+  string token = 1; // returned once at issue
+  google.protobuf.Timestamp expire_time = 2;
+}
+
+message GetSiteInstallCommandRequest {
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+  string os = 2; // "linux" (default) or "windows"
+}
+
+message GetSiteInstallCommandResponse {
+  string command = 1;
+  string token = 2;
+  google.protobuf.Timestamp expire_time = 3;
+}

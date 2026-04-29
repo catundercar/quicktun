@@ -44,3 +44,31 @@ func TestValidateSlug(t *testing.T) {
 		require.Error(t, resource.ValidateSlug(s), "expected %q to be invalid", s)
 	}
 }
+
+func TestFormatSiteName(t *testing.T) {
+	require.Equal(t, "projects/clinic/sites/bastion-1", resource.FormatSiteName("clinic", "bastion-1"))
+}
+
+func TestParseSiteName(t *testing.T) {
+	n, err := resource.ParseSiteName("projects/clinic/sites/bastion-1")
+	require.NoError(t, err)
+	require.Equal(t, "clinic", n.Project)
+	require.Equal(t, "bastion-1", n.Site)
+}
+
+func TestParseSiteNameRejects(t *testing.T) {
+	cases := []string{
+		"",
+		"projects/clinic",
+		"projects/clinic/sites/",
+		"sites/clinic/sites/x",
+		"projects/clinic/something/x",
+		"projects/Bad/sites/ok",
+		"projects/ok/sites/Bad",
+		"projects/clinic/sites/x/extra",
+	}
+	for _, name := range cases {
+		_, err := resource.ParseSiteName(name)
+		require.Error(t, err, "expected error for %q", name)
+	}
+}

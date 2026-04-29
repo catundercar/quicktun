@@ -59,3 +59,37 @@ func ParseProjectName(name string) (string, error) {
 	}
 	return parts[1], nil
 }
+
+const collectionSites = "sites"
+
+// SiteName carries the parsed (project_slug, site_slug) tuple.
+type SiteName struct {
+	Project string
+	Site    string
+}
+
+// FormatSiteName returns "projects/{project}/sites/{site}".
+func FormatSiteName(projectSlug, siteSlug string) string {
+	return collectionProjects + "/" + projectSlug + "/" + collectionSites + "/" + siteSlug
+}
+
+// ParseSiteName parses "projects/{project}/sites/{site}" into a SiteName.
+func ParseSiteName(name string) (SiteName, error) {
+	parts := strings.Split(name, "/")
+	if len(parts) != 4 || parts[0] != collectionProjects || parts[2] != collectionSites {
+		return SiteName{}, errors.New(`resource: site name must be "projects/{p}/sites/{s}"`)
+	}
+	if err := ValidateSlug(parts[1]); err != nil {
+		return SiteName{}, err
+	}
+	if err := ValidateSlug(parts[3]); err != nil {
+		return SiteName{}, err
+	}
+	return SiteName{Project: parts[1], Site: parts[3]}, nil
+}
+
+// ParseProjectParent parses "projects/{project}" used as a List request parent.
+// Same as ParseProjectName; aliased for readability.
+func ParseProjectParent(parent string) (string, error) {
+	return ParseProjectName(parent)
+}
