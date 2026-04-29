@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
@@ -18,6 +19,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
@@ -61,7 +64,7 @@ func New(cfg Config) (*Server, error) {
 	authSvc := grpcsvc.NewAuthService(ops, sessions, cfg.SessionTTL)
 
 	intc := auth.NewUnaryInterceptor(sessions, "/quicktun.v1.AuthService/Login")
-	gs := grpc.NewServer(grpc.UnaryInterceptor(intc))
+	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(sourceIPInterceptor, intc))
 	quicktunv1.RegisterAuthServiceServer(gs, authSvc)
 
 	auditWriter := audit.NewWriter(cfg.DB)
@@ -158,6 +161,28 @@ func gatewayErrorHandler(ctx context.Context, mux *runtime.ServeMux, marshaler r
 	if b, encErr := json.Marshal(body); encErr == nil {
 		w.Write(b) //nolint:errcheck
 	}
+}
+
+// sourceIPInterceptor injects the caller's source IP into ctx via
+// audit.WithSourceIP so that all downstream audit.Writer.Log calls pick it up.
+func sourceIPInterceptor(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	return handler(audit.WithSourceIP(ctx, extractSourceIP(ctx)), req)
+}
+
+func extractSourceIP(ctx context.Context) string {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if v := md.Get("x-forwarded-for"); len(v) > 0 && v[0] != "" {
+			ip := v[0]
+			if i := strings.Index(ip, ","); i >= 0 {
+				ip = ip[:i]
+			}
+			return strings.TrimSpace(ip)
+		}
+	}
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		return p.Addr.String()
+	}
+	return ""
 }
 
 func recoverHandler(lg *zap.Logger, h http.Handler) http.Handler {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/smoke.sh — end-to-end Plan 2 verification.
+# scripts/smoke.sh — end-to-end auth + project + site verification.
 # Spins up the server with a temp DB and verifies login + whoami via HTTP.
 set -euo pipefail
 

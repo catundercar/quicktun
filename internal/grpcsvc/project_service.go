@@ -3,6 +3,7 @@ package grpcsvc
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -28,10 +29,6 @@ type ProjectService struct {
 func NewProjectService(projects *dao.ProjectDAO, audit *audit.Writer) *ProjectService {
 	return &ProjectService{projects: projects, audit: audit}
 }
-
-// errInvalidToken is returned by DAO.List when page_token cannot be parsed.
-// Sentinel kept here so service can map to InvalidArgument.
-var errInvalidToken = errors.New("invalid page token")
 
 // GetProject implements quicktunv1.ProjectServiceServer.
 func (s *ProjectService) GetProject(ctx context.Context, req *quicktunv1.GetProjectRequest) (*quicktunv1.Project, error) {
@@ -78,7 +75,7 @@ func (s *ProjectService) ListProjects(ctx context.Context, req *quicktunv1.ListP
 		rows, err = s.projects.ListAccessible(ctx, op.ID, pageSize, pageToken)
 	}
 	if err != nil {
-		if errors.Is(err, errInvalidToken) {
+		if errors.Is(err, dao.ErrInvalidPageToken) {
 			return nil, status.Error(codes.InvalidArgument, "invalid page_token")
 		}
 		return nil, status.Error(codes.Internal, "list failed")
@@ -237,20 +234,8 @@ func isUniqueConstraintErr(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return strContains(msg, "UNIQUE constraint failed") ||
-		strContains(msg, "unique constraint")
-}
-
-func strContains(s, substr string) bool {
-	if len(substr) == 0 {
-		return true
-	}
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(msg, "UNIQUE constraint failed") ||
+		strings.Contains(msg, "unique constraint")
 }
 
 // UpdateProject implements quicktunv1.ProjectServiceServer with FieldMask
@@ -297,11 +282,19 @@ func (s *ProjectService) UpdateProject(ctx context.Context, req *quicktunv1.Upda
 			cur.RelayPortRange = req.Project.RelayPortRange
 			changed["relay_port_range"] = req.Project.RelayPortRange
 		case "default_mode":
-			cur.DefaultMode = siteModeFromProto(req.Project.DefaultMode)
-			changed["default_mode"] = string(cur.DefaultMode)
+			m := siteModeFromProto(req.Project.DefaultMode)
+			if m == "" {
+				return nil, status.Error(codes.InvalidArgument, "default_mode must be ENDPOINT or SUBNET")
+			}
+			cur.DefaultMode = m
+			changed["default_mode"] = string(m)
 		case "backend":
-			cur.Backend = backendFromProto(req.Project.Backend)
-			changed["backend"] = string(cur.Backend)
+			b := backendFromProto(req.Project.Backend)
+			if b == "" {
+				return nil, status.Error(codes.InvalidArgument, "backend must be RATHOLE or NETBIRD")
+			}
+			cur.Backend = b
+			changed["backend"] = string(b)
 		case "status":
 			st := projectStatusFromProto(req.Project.Status)
 			if st == "" {

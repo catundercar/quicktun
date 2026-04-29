@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -9,6 +10,10 @@ import (
 
 	"github.com/tulip/quicktun/internal/model"
 )
+
+// ErrInvalidPageToken is returned by List* methods when a page token cannot
+// be parsed. Callers should map this to codes.InvalidArgument.
+var ErrInvalidPageToken = errors.New("dao: invalid page token")
 
 // ProjectDAO encapsulates queries against the projects table.
 type ProjectDAO struct{ db *gorm.DB }
@@ -57,7 +62,7 @@ func (d *ProjectDAO) List(ctx context.Context, pageSize int, pageToken string) (
 	if pageToken != "" {
 		afterID, err := strconv.ParseUint(pageToken, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("dao: invalid page token: %w", err)
+			return nil, fmt.Errorf("%w: %v", ErrInvalidPageToken, err)
 		}
 		q = q.Where("id > ?", afterID)
 	}
@@ -142,7 +147,7 @@ func (d *ProjectDAO) ListAccessible(ctx context.Context, operatorID uint64, page
 	if pageToken != "" {
 		afterID, err := strconv.ParseUint(pageToken, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("dao: invalid page token: %w", err)
+			return nil, fmt.Errorf("%w: %v", ErrInvalidPageToken, err)
 		}
 		q = q.Where("id > ?", afterID)
 	}

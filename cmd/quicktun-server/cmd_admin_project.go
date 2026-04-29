@@ -12,6 +12,7 @@ import (
 	"github.com/tulip/quicktun/internal/config"
 	"github.com/tulip/quicktun/internal/dao"
 	"github.com/tulip/quicktun/internal/model"
+	"github.com/tulip/quicktun/internal/resource"
 )
 
 func adminProjectCmd() *cobra.Command {
@@ -37,6 +38,9 @@ func adminProjectCreateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if slug == "" || displayName == "" || relayPortRange == "" {
 				return fmt.Errorf("admin project create: --slug, --display-name, --relay-port-range required")
+			}
+			if err := resource.ValidateSlug(slug); err != nil {
+				return fmt.Errorf("admin project create: %w", err)
 			}
 			db, err := openAdminDB(cmd)
 			if err != nil {
