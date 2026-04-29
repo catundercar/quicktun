@@ -1,4 +1,4 @@
-.PHONY: all build test lint clean migrate
+.PHONY: all build test test-race lint clean migrate sync-migrations
 
 GO ?= go
 BINDIR := bin
@@ -8,7 +8,7 @@ all: build
 
 build: $(SERVER_BIN)
 
-$(SERVER_BIN):
+$(SERVER_BIN): sync-migrations
 	@mkdir -p $(BINDIR)
 	$(GO) build -o $@ ./cmd/quicktun-server
 
@@ -20,6 +20,9 @@ test-race:
 
 lint:
 	$(GO) vet ./...
+
+sync-migrations:
+	@cp migrations/*.sql internal/migration/files/
 
 clean:
 	rm -rf $(BINDIR) coverage.txt
