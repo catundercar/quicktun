@@ -6,6 +6,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	quicktunv1 "github.com/tulip/quicktun/gen/go/quicktun/v1"
@@ -250,4 +251,137 @@ func strContains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// UpdateProject implements quicktunv1.ProjectServiceServer with FieldMask
+// semantics: only paths listed in update_mask are written.
+func (s *ProjectService) UpdateProject(ctx context.Context, req *quicktunv1.UpdateProjectRequest) (*quicktunv1.Project, error) {
+	op := auth.OperatorFromContext(ctx)
+	if op == nil {
+		return nil, status.Error(codes.Unauthenticated, "not authenticated")
+	}
+	if !op.IsAdmin {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
+	if req.GetProject() == nil {
+		return nil, status.Error(codes.InvalidArgument, "project body is required")
+	}
+	if req.GetUpdateMask() == nil || len(req.UpdateMask.Paths) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "update_mask is required")
+	}
+	slug, err := resource.ParseProjectName(req.Project.GetName())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	cur, err := s.projects.FindBySlug(ctx, slug)
+	if err != nil {
+		if dao.IsNotFound(err) {
+			return nil, status.Error(codes.NotFound, "project not found")
+		}
+		return nil, status.Error(codes.Internal, "lookup failed")
+	}
+
+	changed := map[string]any{}
+	for _, path := range req.UpdateMask.Paths {
+		switch path {
+		case "display_name":
+			if req.Project.DisplayName == "" {
+				return nil, status.Error(codes.InvalidArgument, "display_name cannot be empty")
+			}
+			cur.Name = req.Project.DisplayName
+			changed["display_name"] = req.Project.DisplayName
+		case "relay_port_range":
+			if req.Project.RelayPortRange == "" {
+				return nil, status.Error(codes.InvalidArgument, "relay_port_range cannot be empty")
+			}
+			cur.RelayPortRange = req.Project.RelayPortRange
+			changed["relay_port_range"] = req.Project.RelayPortRange
+		case "default_mode":
+			cur.DefaultMode = siteModeFromProto(req.Project.DefaultMode)
+			changed["default_mode"] = string(cur.DefaultMode)
+		case "backend":
+			cur.Backend = backendFromProto(req.Project.Backend)
+			changed["backend"] = string(cur.Backend)
+		case "status":
+			st := projectStatusFromProto(req.Project.Status)
+			if st == "" {
+				return nil, status.Error(codes.InvalidArgument, "status must be ACTIVE or DISABLED")
+			}
+			cur.Status = st
+			changed["status"] = string(cur.Status)
+		default:
+			return nil, status.Errorf(codes.InvalidArgument, "unknown update_mask path: %q", path)
+		}
+	}
+
+	if err := s.projects.Update(ctx, cur); err != nil {
+		return nil, status.Error(codes.Internal, "update failed")
+	}
+
+	_ = s.audit.Log(ctx, audit.Entry{
+		ProjectID: ptrUint64(cur.ID),
+		Action:    "project.update",
+		Target:    resource.FormatProjectName(cur.Slug),
+		Extra:     changed,
+	})
+
+	return projectToProto(cur), nil
+}
+
+// DeleteProject implements quicktunv1.ProjectServiceServer.
+//
+// Refuses if the project has live sites and force=false.
+func (s *ProjectService) DeleteProject(ctx context.Context, req *quicktunv1.DeleteProjectRequest) (*emptypb.Empty, error) {
+	op := auth.OperatorFromContext(ctx)
+	if op == nil {
+		return nil, status.Error(codes.Unauthenticated, "not authenticated")
+	}
+	if !op.IsAdmin {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
+	slug, err := resource.ParseProjectName(req.GetName())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	p, err := s.projects.FindBySlug(ctx, slug)
+	if err != nil {
+		if dao.IsNotFound(err) {
+			return nil, status.Error(codes.NotFound, "project not found")
+		}
+		return nil, status.Error(codes.Internal, "lookup failed")
+	}
+
+	if !req.GetForce() {
+		n, err := s.projects.CountSites(ctx, p.ID)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "site count failed")
+		}
+		if n > 0 {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"project has %d sites; pass force=true to cascade", n)
+		}
+	}
+
+	if err := s.projects.Delete(ctx, p.ID); err != nil {
+		return nil, status.Error(codes.Internal, "delete failed")
+	}
+
+	_ = s.audit.Log(ctx, audit.Entry{
+		ProjectID: ptrUint64(p.ID),
+		Action:    "project.delete",
+		Target:    resource.FormatProjectName(p.Slug),
+		Extra:     map[string]any{"force": req.GetForce()},
+	})
+
+	return &emptypb.Empty{}, nil
+}
+
+func projectStatusFromProto(s quicktunv1.ProjectStatus) model.ProjectStatus {
+	switch s {
+	case quicktunv1.ProjectStatus_PROJECT_STATUS_ACTIVE:
+		return model.ProjectStatusActive
+	case quicktunv1.ProjectStatus_PROJECT_STATUS_DISABLED:
+		return model.ProjectStatusDisabled
+	}
+	return ""
 }

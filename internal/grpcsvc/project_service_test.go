@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"gorm.io/gorm"
 
 	quicktunv1 "github.com/tulip/quicktun/gen/go/quicktun/v1"
@@ -195,4 +196,128 @@ func TestCreateProjectRequiresAdmin(t *testing.T) {
 	require.Error(t, err)
 	st, _ := status.FromError(err)
 	require.Equal(t, codes.PermissionDenied, st.Code())
+}
+
+func TestUpdateProjectDisplayName(t *testing.T) {
+	db := openTestDB(t)
+	dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "u-p", Name: "Old", RelayPortRange: "20000-20099",
+	})
+	svc := newProjectService(t, db)
+
+	resp, err := svc.UpdateProject(adminCtx(t, db), &quicktunv1.UpdateProjectRequest{
+		Project: &quicktunv1.Project{
+			Name:        "projects/u-p",
+			DisplayName: "New",
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "New", resp.DisplayName)
+	require.Equal(t, "20000-20099", resp.RelayPortRange) // unchanged
+}
+
+func TestUpdateProjectStatus(t *testing.T) {
+	db := openTestDB(t)
+	dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "u-s", Name: "S", RelayPortRange: "20000-20099", Status: model.ProjectStatusActive,
+	})
+	svc := newProjectService(t, db)
+
+	resp, err := svc.UpdateProject(adminCtx(t, db), &quicktunv1.UpdateProjectRequest{
+		Project: &quicktunv1.Project{
+			Name:   "projects/u-s",
+			Status: quicktunv1.ProjectStatus_PROJECT_STATUS_DISABLED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, quicktunv1.ProjectStatus_PROJECT_STATUS_DISABLED, resp.Status)
+}
+
+func TestUpdateProjectRequiresMask(t *testing.T) {
+	db := openTestDB(t)
+	dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "u-m", Name: "M", RelayPortRange: "20000-20099",
+	})
+	svc := newProjectService(t, db)
+
+	_, err := svc.UpdateProject(adminCtx(t, db), &quicktunv1.UpdateProjectRequest{
+		Project: &quicktunv1.Project{Name: "projects/u-m", DisplayName: "X"},
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestUpdateProjectRequiresAdmin(t *testing.T) {
+	db := openTestDB(t)
+	dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "u-a", Name: "A", RelayPortRange: "20000-20099",
+	})
+	svc := newProjectService(t, db)
+	op := seedOperator(t, db, "user@x.com", "p", false)
+	ctx := auth.WithOperator(context.Background(), op)
+
+	_, err := svc.UpdateProject(ctx, &quicktunv1.UpdateProjectRequest{
+		Project:    &quicktunv1.Project{Name: "projects/u-a", DisplayName: "X"},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.PermissionDenied, st.Code())
+}
+
+func TestDeleteProjectSuccess(t *testing.T) {
+	db := openTestDB(t)
+	dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "d-p", Name: "D", RelayPortRange: "20000-20099",
+	})
+	svc := newProjectService(t, db)
+	ctx := adminCtx(t, db)
+
+	_, err := svc.DeleteProject(ctx, &quicktunv1.DeleteProjectRequest{
+		Name: "projects/d-p",
+	})
+	require.NoError(t, err)
+
+	_, err = svc.GetProject(ctx, &quicktunv1.GetProjectRequest{
+		Name: "projects/d-p",
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.NotFound, st.Code())
+}
+
+func TestDeleteProjectRefusesIfHasSites(t *testing.T) {
+	db := openTestDB(t)
+	store := dao.NewProjectDAO(db)
+	p, _ := store.Create(context.Background(), &model.Project{
+		Slug: "d-s", Name: "S", RelayPortRange: "20000-20099",
+	})
+	require.NoError(t, db.Create(&model.Site{ProjectID: p.ID, Name: "child"}).Error)
+	svc := newProjectService(t, db)
+
+	_, err := svc.DeleteProject(adminCtx(t, db), &quicktunv1.DeleteProjectRequest{
+		Name: "projects/d-s",
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.FailedPrecondition, st.Code())
+}
+
+func TestDeleteProjectForceWithSites(t *testing.T) {
+	db := openTestDB(t)
+	store := dao.NewProjectDAO(db)
+	p, _ := store.Create(context.Background(), &model.Project{
+		Slug: "d-f", Name: "F", RelayPortRange: "20000-20099",
+	})
+	require.NoError(t, db.Create(&model.Site{ProjectID: p.ID, Name: "child"}).Error)
+	svc := newProjectService(t, db)
+
+	_, err := svc.DeleteProject(adminCtx(t, db), &quicktunv1.DeleteProjectRequest{
+		Name:  "projects/d-f",
+		Force: true,
+	})
+	require.NoError(t, err)
 }
