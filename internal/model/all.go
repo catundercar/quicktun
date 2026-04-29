@@ -7,6 +7,7 @@ package model
 // source of truth — AutoMigrate is for in-memory test fixtures only.
 func AllModels() []any {
 	return []any{
-		// populated as model files are added
+		&Operator{},
+		&OperatorSession{},
 	}
 }
