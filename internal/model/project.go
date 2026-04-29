@@ -44,7 +44,7 @@ type Project struct {
 	RelayPortRange string        `gorm:"not null;size:32" json:"relay_port_range"`
 	Status         ProjectStatus `gorm:"not null;default:'active';size:32" json:"status"`
 
-	// Sites []Site `gorm:"foreignKey:ProjectID" json:"-"` // TODO: re-enable in Task 4
+	Sites []Site `gorm:"foreignKey:ProjectID" json:"-"`
 	AccessGrants []OperatorProjectAccess `gorm:"foreignKey:ProjectID" json:"-"`
 }
 

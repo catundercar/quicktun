@@ -23,6 +23,6 @@ type OperatorSession struct {
 	IssuedAt   time.Time  `gorm:"not null" json:"issued_at"`
 	ExpiresAt  time.Time  `gorm:"index;not null" json:"expires_at"`
 	RevokedAt  *time.Time `gorm:"index" json:"revoked_at,omitempty"`
-	UserAgent  string     `gorm:"size:255" json:"user_agent"`
-	SourceIP   string     `gorm:"size:45" json:"source_ip"`
+	UserAgent  string     `gorm:"not null;size:255" json:"user_agent"`
+	SourceIP   string     `gorm:"not null;size:45" json:"source_ip"`
 }
