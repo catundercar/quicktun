@@ -69,4 +69,45 @@ if [ "$CODE" != "401" ]; then
   exit 1
 fi
 
-echo "PASS: end-to-end auth flow"
+echo "auth: PASS"
+
+# Re-login since we logged out earlier in the script.
+LOGIN2=$(curl -sS -X POST "http://127.0.0.1:${HTTP_PORT}/v1/auth:login" \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"test@x.com","password":"hunter2"}')
+TOKEN=$(echo "$LOGIN2" | python3 -c 'import sys,json; print(json.load(sys.stdin)["accessToken"])')
+
+# Create a project via gRPC gateway.
+CREATE_RESP=$(curl -sS -X POST "http://127.0.0.1:${HTTP_PORT}/v1/projects?project_id=smoke-test" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"displayName":"Smoke","relayPortRange":"20000-20099"}')
+echo "create: $CREATE_RESP"
+if ! echo "$CREATE_RESP" | grep -q '"name":"projects/smoke-test"'; then
+  echo "FAIL: create response missing expected name" >&2
+  exit 1
+fi
+
+# List projects.
+LIST_RESP=$(curl -sS "http://127.0.0.1:${HTTP_PORT}/v1/projects" \
+  -H "Authorization: Bearer $TOKEN")
+echo "list: $LIST_RESP"
+if ! echo "$LIST_RESP" | grep -q '"name":"projects/smoke-test"'; then
+  echo "FAIL: list did not include created project" >&2
+  exit 1
+fi
+
+# Delete project.
+curl -sS -X DELETE "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test" \
+  -H "Authorization: Bearer $TOKEN" > /dev/null
+
+# Verify deletion.
+GET_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+  "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test" \
+  -H "Authorization: Bearer $TOKEN")
+if [ "$GET_CODE" != "404" ]; then
+  echo "FAIL: get-after-delete returned $GET_CODE, expected 404" >&2
+  exit 1
+fi
+
+echo "PASS: end-to-end auth + project flow"
