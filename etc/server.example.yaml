@@ -1,0 +1,20 @@
+# quicktun-server example configuration.
+# Copy to etc/server.yaml and edit for your environment.
+
+control_plane:
+  grpc_listen: 0.0.0.0:9443
+  http_listen: 0.0.0.0:9080
+
+database:
+  driver: sqlite
+  dsn: /opt/quicktun/var/quicktun.db?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on
+
+session:
+  default_ttl: 8h
+
+log:
+  path: /opt/quicktun/var/log/control-plane.log
+  level: info
+  max_size_mb: 100
+  max_age_days: 30
+  max_backups: 7
