@@ -1,0 +1,115 @@
+// ProjectService — CRUD for projects (tenant boundary).
+syntax = "proto3";
+
+package quicktun.v1;
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+
+import "quicktun/v1/common.proto";
+
+option go_package = "github.com/tulip/quicktun/gen/go/quicktun/v1;quicktunv1";
+
+// ProjectService manages the project resources that bound multi-tenant data.
+service ProjectService {
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse) {
+    option (google.api.http) = {
+      get: "/v1/projects"
+    };
+  }
+
+  rpc GetProject(GetProjectRequest) returns (Project) {
+    option (google.api.http) = {
+      get: "/v1/{name=projects/*}"
+    };
+  }
+
+  rpc CreateProject(CreateProjectRequest) returns (Project) {
+    option (google.api.http) = {
+      post: "/v1/projects"
+      body: "project"
+    };
+  }
+
+  rpc UpdateProject(UpdateProjectRequest) returns (Project) {
+    option (google.api.http) = {
+      patch: "/v1/{project.name=projects/*}"
+      body: "project"
+    };
+  }
+
+  rpc DeleteProject(DeleteProjectRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/v1/{name=projects/*}"
+    };
+  }
+}
+
+// SiteMode controls how a Site within a project exposes services.
+enum SiteMode {
+  SITE_MODE_UNSPECIFIED = 0;
+  SITE_MODE_ENDPOINT    = 1;
+  SITE_MODE_SUBNET      = 2;
+}
+
+// Backend selects which relay implementation drives the project.
+enum Backend {
+  BACKEND_UNSPECIFIED = 0;
+  BACKEND_RATHOLE     = 1;
+  BACKEND_NETBIRD     = 2;
+}
+
+// ProjectStatus enumerates lifecycle states of a Project.
+enum ProjectStatus {
+  PROJECT_STATUS_UNSPECIFIED = 0;
+  PROJECT_STATUS_ACTIVE      = 1;
+  PROJECT_STATUS_DISABLED    = 2;
+}
+
+message Project {
+  // Resource name. Format: projects/{slug}
+  string name = 1;
+
+  string project_id = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp create_time = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp update_time = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  string display_name      = 10 [(google.api.field_behavior) = REQUIRED];
+  SiteMode default_mode    = 11;
+  Backend  backend         = 12;
+  string   relay_port_range = 13 [(google.api.field_behavior) = REQUIRED];
+  ProjectStatus status     = 14;
+}
+
+message ListProjectsRequest {
+  PageRequest page = 1;
+}
+
+message ListProjectsResponse {
+  repeated Project projects = 1;
+  PageResponse page = 2;
+}
+
+message GetProjectRequest {
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CreateProjectRequest {
+  // The slug to use as the project ID. Must match resource.ValidateSlug rules.
+  string project_id = 1 [(google.api.field_behavior) = REQUIRED];
+  Project project = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+message UpdateProjectRequest {
+  Project project = 1 [(google.api.field_behavior) = REQUIRED];
+  google.protobuf.FieldMask update_mask = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+message DeleteProjectRequest {
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+  // If true, cascade-delete sites + services. Default: refuse if project is non-empty.
+  bool force = 2;
+}
