@@ -31,5 +31,5 @@ etc/server.yaml
 etc/tls/*
 !etc/tls/.gitkeep
 
-# generated
-gen/
+# Generated proto code
+/gen/

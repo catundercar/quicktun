@@ -1,0 +1,22 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/tulip/quicktun/gen/go
+plugins:
+  - remote: buf.build/protocolbuffers/go:v1.36.5
+    out: ../gen/go
+    opt: paths=source_relative
+  - remote: buf.build/grpc/go:v1.5.1
+    out: ../gen/go
+    opt:
+      - paths=source_relative
+      - require_unimplemented_servers=false
+  - remote: buf.build/grpc-ecosystem/gateway:v2.24.0
+    out: ../gen/go
+    opt:
+      - paths=source_relative
+      - generate_unbound_methods=true
+  - remote: buf.build/grpc-ecosystem/openapiv2:v2.24.0
+    out: ../gen/openapiv2

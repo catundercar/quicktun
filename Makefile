@@ -1,4 +1,4 @@
-.PHONY: all build test test-race lint clean migrate sync-migrations check-migrations
+.PHONY: all build test test-race lint clean migrate sync-migrations check-migrations proto proto-lint proto-gen proto-clean
 
 GO ?= go
 BINDIR := bin
@@ -28,6 +28,17 @@ sync-migrations:
 check-migrations: sync-migrations
 	@git diff --exit-code -- internal/migration/files/ \
 		|| (echo "ERROR: internal/migration/files/ is out of sync. Run 'make sync-migrations' and commit." && exit 1)
+
+proto: proto-lint proto-gen
+
+proto-lint:
+	cd api && buf lint
+
+proto-gen:
+	cd api && buf generate
+
+proto-clean:
+	rm -rf gen/
 
 clean:
 	rm -rf $(BINDIR) coverage.txt
