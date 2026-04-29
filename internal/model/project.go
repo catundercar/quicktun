@@ -37,7 +37,7 @@ const (
 // Each project gets its own rathole-server process and its own port range.
 type Project struct {
 	Base
-	Slug           string        `gorm:"uniqueIndex:idx_projects_slug_active,where:deleted_at IS NULL;not null;size:64" json:"slug"`
+	Slug           string        `gorm:"uniqueIndex:uk_projects_slug_active,where:deleted_at IS NULL;not null;size:64" json:"slug"`
 	Name           string        `gorm:"not null;size:255" json:"name"`
 	DefaultMode    SiteMode      `gorm:"not null;default:'endpoint';size:32" json:"default_mode"`
 	Backend        Backend       `gorm:"not null;default:'rathole';size:32" json:"backend"`
