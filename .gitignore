@@ -1,0 +1,35 @@
+# binaries
+/bin/
+/dist/
+*.exe
+
+# data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# logs
+*.log
+/var/
+
+# Go
+/vendor/
+*.test
+*.out
+coverage.txt
+
+# editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# secrets
+.env
+etc/server.yaml
+etc/tls/*
+!etc/tls/.gitkeep
+
+# generated
+gen/
