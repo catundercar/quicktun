@@ -22,6 +22,7 @@ import (
 	"gorm.io/gorm"
 
 	quicktunv1 "github.com/tulip/quicktun/gen/go/quicktun/v1"
+	"github.com/tulip/quicktun/internal/audit"
 	"github.com/tulip/quicktun/internal/auth"
 	"github.com/tulip/quicktun/internal/dao"
 	"github.com/tulip/quicktun/internal/grpcsvc"
@@ -63,6 +64,10 @@ func New(cfg Config) (*Server, error) {
 	gs := grpc.NewServer(grpc.UnaryInterceptor(intc))
 	quicktunv1.RegisterAuthServiceServer(gs, authSvc)
 
+	auditWriter := audit.NewWriter(cfg.DB)
+	projectSvc := grpcsvc.NewProjectService(dao.NewProjectDAO(cfg.DB), auditWriter)
+	quicktunv1.RegisterProjectServiceServer(gs, projectSvc)
+
 	return &Server{cfg: cfg, grpcServer: gs}, nil
 }
 
@@ -80,6 +85,10 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := quicktunv1.RegisterAuthServiceHandlerFromEndpoint(ctx, gatewayMux, s.cfg.GRPCListen, dialOpts); err != nil {
 		grpcLn.Close()
 		return fmt.Errorf("server: register gateway: %w", err)
+	}
+	if err := quicktunv1.RegisterProjectServiceHandlerFromEndpoint(ctx, gatewayMux, s.cfg.GRPCListen, dialOpts); err != nil {
+		grpcLn.Close()
+		return fmt.Errorf("server: register project gateway: %w", err)
 	}
 
 	s.httpServer = &http.Server{

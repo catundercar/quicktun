@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
@@ -143,4 +144,69 @@ func TestServerWhoAmIRequiresAuth(t *testing.T) {
 		body := strings.ToLower(string(buf[:n]))
 		require.Contains(t, body, "unauthenticated")
 	}
+}
+
+func TestProjectCreateAndListEndToEnd(t *testing.T) {
+	db := newDB(t)
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.DefaultCost)
+	_, err := dao.NewOperatorDAO(db).Create(context.Background(), "admin@x.com", string(hash), true)
+	require.NoError(t, err)
+
+	grpcAddr := freePort(t)
+	httpAddr := freePort(t)
+	srv, err := server.New(server.Config{
+		DB: db, Logger: zap.NewNop(),
+		GRPCListen: grpcAddr, HTTPListen: httpAddr,
+		SessionTTL: time.Hour,
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(2 * time.Second):
+		}
+	})
+	require.Eventually(t, func() bool {
+		c, err := net.DialTimeout("tcp", grpcAddr, 100*time.Millisecond)
+		if err != nil {
+			return false
+		}
+		c.Close()
+		return true
+	}, 2*time.Second, 25*time.Millisecond)
+
+	// Login first.
+	conn, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	defer conn.Close()
+	authClient := quicktunv1.NewAuthServiceClient(conn)
+	loginResp, err := authClient.Login(context.Background(), &quicktunv1.LoginRequest{
+		Email: "admin@x.com", Password: "pw",
+	})
+	require.NoError(t, err)
+
+	// Create project with bearer token.
+	projClient := quicktunv1.NewProjectServiceClient(conn)
+	authedCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+loginResp.AccessToken)
+	created, err := projClient.CreateProject(authedCtx, &quicktunv1.CreateProjectRequest{
+		ProjectId: "e2e-test",
+		Project: &quicktunv1.Project{
+			DisplayName:    "E2E",
+			RelayPortRange: "20000-20099",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "projects/e2e-test", created.Name)
+
+	// List should include it.
+	listed, err := projClient.ListProjects(authedCtx, &quicktunv1.ListProjectsRequest{})
+	require.NoError(t, err)
+	require.Len(t, listed.Projects, 1)
+	require.Equal(t, "projects/e2e-test", listed.Projects[0].Name)
 }
