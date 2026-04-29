@@ -7,7 +7,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/tulip/quicktun/internal/config"
 	"github.com/tulip/quicktun/internal/dao"
 )
 
@@ -17,6 +16,7 @@ func adminCmd() *cobra.Command {
 		Short: "Administrative commands",
 	}
 	c.AddCommand(adminCreateOperatorCmd())
+	c.AddCommand(adminProjectCmd())
 	return c
 }
 
@@ -33,17 +33,9 @@ func adminCreateOperatorCmd() *cobra.Command {
 			if email == "" || password == "" {
 				return fmt.Errorf("admin: --email and --password are required")
 			}
-			cfgPath, err := cmd.Root().PersistentFlags().GetString("config")
+			db, err := openAdminDB(cmd)
 			if err != nil {
 				return err
-			}
-			cfg, err := config.Load(cfgPath)
-			if err != nil {
-				return fmt.Errorf("admin: %w", err)
-			}
-			db, err := dao.Open(cfg.Database.DSN, nil)
-			if err != nil {
-				return fmt.Errorf("admin: %w", err)
 			}
 			defer func() { s, _ := db.DB(); s.Close() }()
 
