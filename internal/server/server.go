@@ -71,6 +71,14 @@ func New(cfg Config) (*Server, error) {
 	projectSvc := grpcsvc.NewProjectService(dao.NewProjectDAO(cfg.DB), auditWriter)
 	quicktunv1.RegisterProjectServiceServer(gs, projectSvc)
 
+	siteSvc := grpcsvc.NewSiteService(
+		dao.NewProjectDAO(cfg.DB),
+		dao.NewSiteDAO(cfg.DB),
+		dao.NewSiteAgentTokenDAO(cfg.DB),
+		auditWriter,
+	)
+	quicktunv1.RegisterSiteServiceServer(gs, siteSvc)
+
 	return &Server{cfg: cfg, grpcServer: gs}, nil
 }
 
@@ -92,6 +100,10 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := quicktunv1.RegisterProjectServiceHandlerFromEndpoint(ctx, gatewayMux, s.cfg.GRPCListen, dialOpts); err != nil {
 		grpcLn.Close()
 		return fmt.Errorf("server: register project gateway: %w", err)
+	}
+	if err := quicktunv1.RegisterSiteServiceHandlerFromEndpoint(ctx, gatewayMux, s.cfg.GRPCListen, dialOpts); err != nil {
+		grpcLn.Close()
+		return fmt.Errorf("server: register site gateway: %w", err)
 	}
 
 	s.httpServer = &http.Server{

@@ -210,3 +210,67 @@ func TestProjectCreateAndListEndToEnd(t *testing.T) {
 	require.Len(t, listed.Projects, 1)
 	require.Equal(t, "projects/e2e-test", listed.Projects[0].Name)
 }
+
+func TestSiteCreateEndToEnd(t *testing.T) {
+	db := newDB(t)
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.DefaultCost)
+	_, err := dao.NewOperatorDAO(db).Create(context.Background(), "admin@x.com", string(hash), true)
+	require.NoError(t, err)
+	_, err = dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "p1", Name: "P1", RelayPortRange: "20000-20099",
+	})
+	require.NoError(t, err)
+
+	grpcAddr := freePort(t)
+	httpAddr := freePort(t)
+	srv, err := server.New(server.Config{
+		DB: db, Logger: zap.NewNop(),
+		GRPCListen: grpcAddr, HTTPListen: httpAddr,
+		SessionTTL: time.Hour,
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(2 * time.Second):
+		}
+	})
+	require.Eventually(t, func() bool {
+		c, err := net.DialTimeout("tcp", grpcAddr, 100*time.Millisecond)
+		if err != nil {
+			return false
+		}
+		c.Close()
+		return true
+	}, 2*time.Second, 25*time.Millisecond)
+
+	conn, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	authClient := quicktunv1.NewAuthServiceClient(conn)
+	loginResp, err := authClient.Login(context.Background(), &quicktunv1.LoginRequest{
+		Email: "admin@x.com", Password: "pw",
+	})
+	require.NoError(t, err)
+
+	siteClient := quicktunv1.NewSiteServiceClient(conn)
+	authedCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+loginResp.AccessToken)
+	created, err := siteClient.CreateSite(authedCtx, &quicktunv1.CreateSiteRequest{
+		Parent: "projects/p1",
+		SiteId: "e2e-site",
+		Site:   &quicktunv1.Site{DisplayName: "E2E"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "projects/p1/sites/e2e-site", created.Name)
+
+	listed, err := siteClient.ListSites(authedCtx, &quicktunv1.ListSitesRequest{Parent: "projects/p1"})
+	require.NoError(t, err)
+	require.Len(t, listed.Sites, 1)
+}
