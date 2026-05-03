@@ -253,6 +253,106 @@ func (s *SiteService) CreateSite(ctx context.Context, req *quicktunv1.CreateSite
 	return siteToProto(p, row), nil
 }
 
+// UpdateSite implements quicktunv1.SiteServiceServer.
+func (s *SiteService) UpdateSite(ctx context.Context, req *quicktunv1.UpdateSiteRequest) (*quicktunv1.Site, error) {
+	if req.GetSite() == nil {
+		return nil, status.Error(codes.InvalidArgument, "site body is required")
+	}
+	if req.GetUpdateMask() == nil || len(req.UpdateMask.Paths) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "update_mask is required")
+	}
+	p, site, err := s.resolveSite(ctx, req.Site.GetName())
+	if err != nil {
+		return nil, err
+	}
+	op := auth.OperatorFromContext(ctx)
+	if !op.IsAdmin {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
+
+	changed := map[string]any{}
+	var displayNameOverride string
+	for _, path := range req.UpdateMask.Paths {
+		switch path {
+		case "display_name":
+			// model.Site has no display_name column in Phase 1; treat as a no-op
+			// at the DB layer but record in audit so future schema split keeps
+			// backward compatibility.
+			displayNameOverride = req.Site.DisplayName
+			changed["display_name"] = req.Site.DisplayName
+		case "lan_cidrs":
+			b, err := json.Marshal(req.Site.LanCidrs)
+			if err != nil {
+				return nil, status.Error(codes.InvalidArgument, "lan_cidrs cannot be marshaled")
+			}
+			site.LanCidrsJSON = string(b)
+			changed["lan_cidrs"] = req.Site.LanCidrs
+		case "mode":
+			m := siteModeFromProto(req.Site.Mode)
+			if m == "" {
+				return nil, status.Error(codes.InvalidArgument, "mode must be ENDPOINT or SUBNET")
+			}
+			site.Mode = m
+			changed["mode"] = string(m)
+		case "backend":
+			b := backendFromProto(req.Site.Backend)
+			if b == "" {
+				return nil, status.Error(codes.InvalidArgument, "backend must be RATHOLE or NETBIRD")
+			}
+			site.Backend = b
+			changed["backend"] = string(b)
+		default:
+			return nil, status.Errorf(codes.InvalidArgument, "unknown update_mask path: %q", path)
+		}
+	}
+
+	if err := s.sites.Update(ctx, site); err != nil {
+		return nil, status.Error(codes.Internal, "update failed")
+	}
+
+	_ = s.audit.Log(ctx, audit.Entry{
+		ProjectID: ptrUint64(p.ID),
+		Action:    "site.update",
+		Target:    resource.FormatSiteName(p.Slug, site.Name),
+		Extra:     changed,
+	})
+
+	out := siteToProto(p, site)
+	if displayNameOverride != "" {
+		out.DisplayName = displayNameOverride
+	}
+	return out, nil
+}
+
+// RotateSiteAgentToken implements quicktunv1.SiteServiceServer.
+func (s *SiteService) RotateSiteAgentToken(ctx context.Context, req *quicktunv1.RotateSiteAgentTokenRequest) (*quicktunv1.RotateSiteAgentTokenResponse, error) {
+	p, site, err := s.resolveSite(ctx, req.GetName())
+	if err != nil {
+		return nil, err
+	}
+	op := auth.OperatorFromContext(ctx)
+	if !op.IsAdmin {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
+
+	rec, raw, err := s.tokens.Issue(ctx, site.ID, 0)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "issue failed")
+	}
+
+	_ = s.audit.Log(ctx, audit.Entry{
+		ProjectID: ptrUint64(p.ID),
+		Action:    "site.rotate_agent_token",
+		Target:    resource.FormatSiteName(p.Slug, site.Name),
+	})
+
+	resp := &quicktunv1.RotateSiteAgentTokenResponse{Token: raw}
+	if rec.ExpiresAt != nil {
+		resp.ExpireTime = timestamppb.New(*rec.ExpiresAt)
+	}
+	return resp, nil
+}
+
 // DeleteSite implements quicktunv1.SiteServiceServer.
 func (s *SiteService) DeleteSite(ctx context.Context, req *quicktunv1.DeleteSiteRequest) (*emptypb.Empty, error) {
 	p, site, err := s.resolveSite(ctx, req.GetName())

@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"gorm.io/gorm"
 
 	quicktunv1 "github.com/tulip/quicktun/gen/go/quicktun/v1"
@@ -275,4 +276,95 @@ func TestDeleteSiteForceWithServices(t *testing.T) {
 		Name: "projects/p1/sites/force-target", Force: true,
 	})
 	require.NoError(t, err)
+}
+
+func TestUpdateSiteDisplayName(t *testing.T) {
+	db := openTestDB(t)
+	mkProjAndSite(t, db, "p1", "u-target")
+	svc := newSiteService(t, db)
+
+	resp, err := svc.UpdateSite(adminCtx(t, db), &quicktunv1.UpdateSiteRequest{
+		Site: &quicktunv1.Site{
+			Name:        "projects/p1/sites/u-target",
+			DisplayName: "New Name",
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "New Name", resp.DisplayName)
+}
+
+func TestUpdateSiteLanCidrs(t *testing.T) {
+	db := openTestDB(t)
+	mkProjAndSite(t, db, "p1", "lan-target")
+	svc := newSiteService(t, db)
+
+	resp, err := svc.UpdateSite(adminCtx(t, db), &quicktunv1.UpdateSiteRequest{
+		Site: &quicktunv1.Site{
+			Name:     "projects/p1/sites/lan-target",
+			LanCidrs: []string{"192.168.10.0/24", "10.0.0.0/8"},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"lan_cidrs"}},
+	})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"192.168.10.0/24", "10.0.0.0/8"}, resp.LanCidrs)
+}
+
+func TestUpdateSiteRequiresMask(t *testing.T) {
+	db := openTestDB(t)
+	mkProjAndSite(t, db, "p1", "m-target")
+	svc := newSiteService(t, db)
+
+	_, err := svc.UpdateSite(adminCtx(t, db), &quicktunv1.UpdateSiteRequest{
+		Site: &quicktunv1.Site{Name: "projects/p1/sites/m-target", DisplayName: "X"},
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestRotateSiteAgentToken(t *testing.T) {
+	db := openTestDB(t)
+	mkProjAndSite(t, db, "p1", "rotate-target")
+	svc := newSiteService(t, db)
+	ctx := adminCtx(t, db)
+
+	resp1, err := svc.RotateSiteAgentToken(ctx, &quicktunv1.RotateSiteAgentTokenRequest{
+		Name: "projects/p1/sites/rotate-target",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, resp1.Token)
+
+	resp2, err := svc.RotateSiteAgentToken(ctx, &quicktunv1.RotateSiteAgentTokenRequest{
+		Name: "projects/p1/sites/rotate-target",
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, resp1.Token, resp2.Token)
+
+	tokens := dao.NewSiteAgentTokenDAO(db)
+	_, err = tokens.ValidateRaw(context.Background(), resp1.Token)
+	require.Error(t, err)
+	_, err = tokens.ValidateRaw(context.Background(), resp2.Token)
+	require.NoError(t, err)
+}
+
+func TestRotateSiteAgentTokenRequiresAdmin(t *testing.T) {
+	db := openTestDB(t)
+	p, _ := dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "p1", Name: "P1", RelayPortRange: "20000-20099",
+	})
+	dao.NewSiteDAO(db).Create(context.Background(), &model.Site{ProjectID: p.ID, Name: "x"})
+	op := seedOperator(t, db, "u@x.com", "p", false)
+	require.NoError(t, db.Create(&model.OperatorProjectAccess{
+		OperatorID: op.ID, ProjectID: p.ID, Role: model.ProjectRoleOperator,
+	}).Error)
+	svc := newSiteService(t, db)
+
+	ctx := auth.WithOperator(context.Background(), op)
+	_, err := svc.RotateSiteAgentToken(ctx, &quicktunv1.RotateSiteAgentTokenRequest{
+		Name: "projects/p1/sites/x",
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.PermissionDenied, st.Code())
 }
