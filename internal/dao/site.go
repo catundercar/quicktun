@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -171,7 +172,9 @@ func (d *SiteAgentTokenDAO) ValidateRaw(ctx context.Context, raw string) (uint64
 		return 0, fmt.Errorf("dao: site token lookup: %w", err)
 	}
 	now := time.Now().UTC()
-	d.db.WithContext(ctx).Model(&model.SiteAgentToken{}).
-		Where("id = ?", rec.ID).Update("last_used_at", &now)
+	if err := d.db.WithContext(ctx).Model(&model.SiteAgentToken{}).
+		Where("id = ?", rec.ID).Update("last_used_at", &now).Error; err != nil {
+		fmt.Fprintf(os.Stderr, "dao: site token last_used_at update: %v\n", err)
+	}
 	return rec.SiteID, nil
 }

@@ -39,7 +39,7 @@ func TestValidateSlug(t *testing.T) {
 	for _, s := range valid {
 		require.NoError(t, resource.ValidateSlug(s), "expected %q to be valid", s)
 	}
-	invalid := []string{"", "ab", "Abc", "abc_def", "abc def", "abc-", "-abc", "a--b", strings.Repeat("a", 65)}
+	invalid := []string{"", "Abc", "abc_def", "abc def", "abc-", "-abc", "a--b", strings.Repeat("a", 65)}
 	for _, s := range invalid {
 		require.Error(t, resource.ValidateSlug(s), "expected %q to be invalid", s)
 	}
@@ -69,6 +69,36 @@ func TestParseSiteNameRejects(t *testing.T) {
 	}
 	for _, name := range cases {
 		_, err := resource.ParseSiteName(name)
+		require.Error(t, err, "expected error for %q", name)
+	}
+}
+
+func TestFormatServiceName(t *testing.T) {
+	require.Equal(t, "projects/p/sites/s/services/ssh",
+		resource.FormatServiceName("p", "s", "ssh"))
+}
+
+func TestParseServiceName(t *testing.T) {
+	n, err := resource.ParseServiceName("projects/clinic/sites/bastion-1/services/ssh")
+	require.NoError(t, err)
+	require.Equal(t, "clinic", n.Project)
+	require.Equal(t, "bastion-1", n.Site)
+	require.Equal(t, "ssh", n.Service)
+}
+
+func TestParseServiceNameRejects(t *testing.T) {
+	cases := []string{
+		"",
+		"projects/p/sites/s",
+		"projects/p/sites/s/services/",
+		"projects/p/sites/s/services/x/extra",
+		"sites/p/sites/s/services/x",
+		"projects/Bad/sites/s/services/x",
+		"projects/p/sites/Bad/services/x",
+		"projects/p/sites/s/services/Bad",
+	}
+	for _, name := range cases {
+		_, err := resource.ParseServiceName(name)
 		require.Error(t, err, "expected error for %q", name)
 	}
 }

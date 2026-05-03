@@ -37,6 +37,7 @@ type Config struct {
 	Logger     *zap.Logger
 	GRPCListen string
 	HTTPListen string
+	RelayAddr  string
 	SessionTTL time.Duration
 }
 
@@ -76,6 +77,7 @@ func New(cfg Config) (*Server, error) {
 		dao.NewSiteDAO(cfg.DB),
 		dao.NewSiteAgentTokenDAO(cfg.DB),
 		auditWriter,
+		cfg.RelayAddr,
 	)
 	quicktunv1.RegisterSiteServiceServer(gs, siteSvc)
 

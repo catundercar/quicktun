@@ -34,6 +34,7 @@ type Config struct {
 type ControlPlaneConfig struct {
 	GRPCListen string `mapstructure:"grpc_listen"`
 	HTTPListen string `mapstructure:"http_listen"`
+	RelayAddr  string `mapstructure:"relay_addr"`
 }
 
 // DatabaseConfig describes the persistence layer.
@@ -105,6 +106,7 @@ func (c *Config) Validate() error {
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("control_plane.grpc_listen", "0.0.0.0:9443")
 	v.SetDefault("control_plane.http_listen", "0.0.0.0:9080")
+	v.SetDefault("control_plane.relay_addr", "relay.example.com:443")
 	v.SetDefault("database.driver", "sqlite")
 	v.SetDefault("session.default_ttl", "8h")
 	v.SetDefault("log.level", "info")

@@ -24,6 +24,7 @@ func newSiteService(t *testing.T, db *gorm.DB) *grpcsvc.SiteService {
 		dao.NewSiteDAO(db),
 		dao.NewSiteAgentTokenDAO(db),
 		audit.NewWriter(db),
+		"test-relay.example.com:443",
 	)
 }
 
@@ -418,4 +419,35 @@ func TestGetSiteInstallCommandRequiresAdmin(t *testing.T) {
 	require.Error(t, err)
 	st, _ := status.FromError(err)
 	require.Equal(t, codes.PermissionDenied, st.Code())
+}
+
+func TestUpdateSiteRejectsUnspecifiedMode(t *testing.T) {
+	db := openTestDB(t)
+	mkProjAndSite(t, db, "p1", "u-mode")
+	svc := newSiteService(t, db)
+
+	_, err := svc.UpdateSite(adminCtx(t, db), &quicktunv1.UpdateSiteRequest{
+		Site: &quicktunv1.Site{
+			Name: "projects/p1/sites/u-mode",
+			Mode: quicktunv1.SiteMode_SITE_MODE_UNSPECIFIED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"mode"}},
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestGetSiteInstallCommandRejectsBadOS(t *testing.T) {
+	db := openTestDB(t)
+	mkProjAndSite(t, db, "p1", "bad-os-target")
+	svc := newSiteService(t, db)
+
+	_, err := svc.GetSiteInstallCommand(adminCtx(t, db), &quicktunv1.GetSiteInstallCommandRequest{
+		Name: "projects/p1/sites/bad-os-target",
+		Os:   "freebsd",
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.InvalidArgument, st.Code())
 }

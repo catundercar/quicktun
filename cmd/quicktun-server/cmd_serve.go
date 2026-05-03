@@ -53,6 +53,7 @@ func serveCmd() *cobra.Command {
 				Logger:     lg,
 				GRPCListen: cfg.ControlPlane.GRPCListen,
 				HTTPListen: cfg.ControlPlane.HTTPListen,
+				RelayAddr:  cfg.ControlPlane.RelayAddr,
 				SessionTTL: cfg.Session.DefaultTTL,
 			})
 			if err != nil {

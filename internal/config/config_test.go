@@ -90,3 +90,15 @@ database:
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "only sqlite driver supported")
 }
+
+func TestRelayAddrDefault(t *testing.T) {
+	yaml := `
+database:
+  dsn: ":memory:"
+`
+	path := filepath.Join(t.TempDir(), "server.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o600))
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "relay.example.com:443", cfg.ControlPlane.RelayAddr)
+}

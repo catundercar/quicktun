@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -23,37 +22,22 @@ import (
 // SiteService implements quicktunv1.SiteServiceServer.
 type SiteService struct {
 	quicktunv1.UnimplementedSiteServiceServer
-	projects *dao.ProjectDAO
-	sites    *dao.SiteDAO
-	tokens   *dao.SiteAgentTokenDAO
-	audit    *audit.Writer
+	projects  *dao.ProjectDAO
+	sites     *dao.SiteDAO
+	tokens    *dao.SiteAgentTokenDAO
+	audit     *audit.Writer
+	relayAddr string
 }
 
 // NewSiteService constructs a SiteService.
-func NewSiteService(projects *dao.ProjectDAO, sites *dao.SiteDAO, tokens *dao.SiteAgentTokenDAO, audit *audit.Writer) *SiteService {
-	return &SiteService{projects: projects, sites: sites, tokens: tokens, audit: audit}
-}
-
-// parseProjectParent extracts the project slug from "projects/{slug}" without
-// enforcing slug length constraints beyond non-empty. This allows short slugs
-// used in tests and simple project names.
-func parseProjectParent(parent string) (string, error) {
-	parts := strings.SplitN(parent, "/", 3)
-	if len(parts) != 2 || parts[0] != "projects" || parts[1] == "" {
-		return "", errors.New(`name must be "projects/{slug}"`)
+func NewSiteService(projects *dao.ProjectDAO, sites *dao.SiteDAO, tokens *dao.SiteAgentTokenDAO, audit *audit.Writer, relayAddr string) *SiteService {
+	if relayAddr == "" {
+		relayAddr = "relay.example.com:443"
 	}
-	return parts[1], nil
-}
-
-// parseSiteName extracts (projectSlug, siteSlug) from "projects/{p}/sites/{s}"
-// without enforcing slug length constraints beyond non-empty.
-func parseSiteName(name string) (projectSlug, siteSlug string, err error) {
-	parts := strings.Split(name, "/")
-	if len(parts) != 4 || parts[0] != "projects" || parts[2] != "sites" ||
-		parts[1] == "" || parts[3] == "" {
-		return "", "", errors.New(`name must be "projects/{p}/sites/{s}"`)
+	return &SiteService{
+		projects: projects, sites: sites, tokens: tokens, audit: audit,
+		relayAddr: relayAddr,
 	}
-	return parts[1], parts[3], nil
 }
 
 // resolveProject parses parent, looks up the project, and authorizes the
@@ -65,7 +49,7 @@ func (s *SiteService) resolveProject(ctx context.Context, parent string) (*model
 	if op == nil {
 		return nil, status.Error(codes.Unauthenticated, "not authenticated")
 	}
-	slug, err := parseProjectParent(parent)
+	slug, err := resource.ParseProjectParent(parent)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -92,15 +76,15 @@ func (s *SiteService) resolveSite(ctx context.Context, name string) (*model.Proj
 	if op == nil {
 		return nil, nil, status.Error(codes.Unauthenticated, "not authenticated")
 	}
-	projectSlug, siteSlug, err := parseSiteName(name)
+	sn, err := resource.ParseSiteName(name)
 	if err != nil {
 		return nil, nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	p, err := s.resolveProject(ctx, "projects/"+projectSlug)
+	p, err := s.resolveProject(ctx, "projects/"+sn.Project)
 	if err != nil {
 		return nil, nil, err
 	}
-	site, err := s.sites.FindByName(ctx, p.ID, siteSlug)
+	site, err := s.sites.FindByName(ctx, p.ID, sn.Site)
 	if err != nil {
 		if dao.IsNotFound(err) {
 			return nil, nil, status.Error(codes.NotFound, "site not found")
@@ -388,12 +372,12 @@ func (s *SiteService) GetSiteInstallCommand(ctx context.Context, req *quicktunv1
 	var cmd string
 	switch osKind {
 	case "linux":
-		cmd = "curl -fsSL https://relay.example.com/install/agent.sh | " +
-			"QT_TOKEN=" + raw + " QT_ENDPOINT=relay.example.com:443 bash"
+		cmd = "curl -fsSL https://" + s.relayAddr + "/install/agent.sh | " +
+			"QT_TOKEN=" + raw + " QT_ENDPOINT=" + s.relayAddr + " bash"
 	case "windows":
 		cmd = `$env:QT_TOKEN="` + raw + `"; ` +
-			`$env:QT_ENDPOINT="relay.example.com:443"; ` +
-			`iwr -useb https://relay.example.com/install/agent.ps1 | iex`
+			`$env:QT_ENDPOINT="` + s.relayAddr + `"; ` +
+			`iwr -useb https://` + s.relayAddr + `/install/agent.ps1 | iex`
 	}
 
 	_ = s.audit.Log(ctx, audit.Entry{

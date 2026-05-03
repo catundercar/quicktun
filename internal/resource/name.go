@@ -14,7 +14,7 @@ import (
 const (
 	collectionProjects = "projects"
 
-	minSlugLen = 3
+	minSlugLen = 1
 	maxSlugLen = 64
 )
 
@@ -92,4 +92,51 @@ func ParseSiteName(name string) (SiteName, error) {
 // Same as ParseProjectName; aliased for readability.
 func ParseProjectParent(parent string) (string, error) {
 	return ParseProjectName(parent)
+}
+
+const collectionServices = "services"
+
+// ServiceName carries the parsed (project_slug, site_slug, service_slug) tuple.
+type ServiceName struct {
+	Project string
+	Site    string
+	Service string
+}
+
+// FormatServiceName returns "projects/{p}/sites/{s}/services/{svc}".
+func FormatServiceName(projectSlug, siteSlug, serviceSlug string) string {
+	return collectionProjects + "/" + projectSlug + "/" +
+		collectionSites + "/" + siteSlug + "/" +
+		collectionServices + "/" + serviceSlug
+}
+
+// ParseServiceName parses "projects/{p}/sites/{s}/services/{svc}".
+func ParseServiceName(name string) (ServiceName, error) {
+	parts := strings.Split(name, "/")
+	if len(parts) != 6 ||
+		parts[0] != collectionProjects ||
+		parts[2] != collectionSites ||
+		parts[4] != collectionServices {
+		return ServiceName{}, errors.New(`resource: service name must be "projects/{p}/sites/{s}/services/{svc}"`)
+	}
+	if err := ValidateSlug(parts[1]); err != nil {
+		return ServiceName{}, err
+	}
+	if err := ValidateSlug(parts[3]); err != nil {
+		return ServiceName{}, err
+	}
+	if err := ValidateSlug(parts[5]); err != nil {
+		return ServiceName{}, err
+	}
+	return ServiceName{Project: parts[1], Site: parts[3], Service: parts[5]}, nil
+}
+
+// FormatSiteParent returns "projects/{p}/sites/{s}" used as a List parent.
+func FormatSiteParent(projectSlug, siteSlug string) string {
+	return collectionProjects + "/" + projectSlug + "/" + collectionSites + "/" + siteSlug
+}
+
+// ParseSiteParent parses "projects/{p}/sites/{s}" used as a List request parent.
+func ParseSiteParent(parent string) (SiteName, error) {
+	return ParseSiteName(parent)
 }
