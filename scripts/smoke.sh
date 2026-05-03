@@ -97,6 +97,39 @@ if ! echo "$LIST_RESP" | grep -q '"name":"projects/smoke-test"'; then
   exit 1
 fi
 
+echo "project: PASS"
+
+# Site flow: create site under project, list, rotate token, delete.
+SITE_RESP=$(curl -sS -X POST "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test/sites?site_id=smoke-bastion" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"displayName":"Smoke Bastion"}')
+echo "site create: $SITE_RESP"
+if ! echo "$SITE_RESP" | grep -q '"name":"projects/smoke-test/sites/smoke-bastion"'; then
+  echo "FAIL: site create response missing expected name" >&2
+  exit 1
+fi
+
+LIST_SITES=$(curl -sS "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test/sites" \
+  -H "Authorization: Bearer $TOKEN")
+echo "site list: $LIST_SITES"
+if ! echo "$LIST_SITES" | grep -q '"name":"projects/smoke-test/sites/smoke-bastion"'; then
+  echo "FAIL: site list missing the created site" >&2
+  exit 1
+fi
+
+ROTATE_RESP=$(curl -sS -X POST "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test/sites/smoke-bastion:rotateAgentToken" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}')
+echo "rotate: $ROTATE_RESP"
+if ! echo "$ROTATE_RESP" | grep -q '"token":'; then
+  echo "FAIL: rotate response missing token" >&2
+  exit 1
+fi
+
+curl -sS -X DELETE "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test/sites/smoke-bastion" \
+  -H "Authorization: Bearer $TOKEN" > /dev/null
+echo "site: PASS"
+
 # Delete project.
 curl -sS -X DELETE "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test" \
   -H "Authorization: Bearer $TOKEN" > /dev/null
@@ -110,4 +143,4 @@ if [ "$GET_CODE" != "404" ]; then
   exit 1
 fi
 
-echo "PASS: end-to-end auth + project flow"
+echo "PASS: end-to-end auth + project + site flow"

@@ -17,6 +17,7 @@ func adminCmd() *cobra.Command {
 	}
 	c.AddCommand(adminCreateOperatorCmd())
 	c.AddCommand(adminProjectCmd())
+	c.AddCommand(adminSiteCmd())
 	return c
 }
 
