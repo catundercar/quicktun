@@ -274,3 +274,76 @@ func TestSiteCreateEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, listed.Sites, 1)
 }
+
+func TestServiceCreateEndToEnd(t *testing.T) {
+	db := newDB(t)
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.DefaultCost)
+	_, err := dao.NewOperatorDAO(db).Create(context.Background(), "admin@x.com", string(hash), true)
+	require.NoError(t, err)
+	p, _ := dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "p1", Name: "P1", RelayPortRange: "20000-20099",
+	})
+	_, err = dao.NewSiteDAO(db).Create(context.Background(), &model.Site{
+		ProjectID: p.ID, Name: "bastion",
+	})
+	require.NoError(t, err)
+
+	grpcAddr := freePort(t)
+	httpAddr := freePort(t)
+	srv, err := server.New(server.Config{
+		DB: db, Logger: zap.NewNop(),
+		GRPCListen: grpcAddr, HTTPListen: httpAddr,
+		SessionTTL: time.Hour,
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(2 * time.Second):
+		}
+	})
+	require.Eventually(t, func() bool {
+		c, err := net.DialTimeout("tcp", grpcAddr, 100*time.Millisecond)
+		if err != nil {
+			return false
+		}
+		c.Close()
+		return true
+	}, 2*time.Second, 25*time.Millisecond)
+
+	conn, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	authClient := quicktunv1.NewAuthServiceClient(conn)
+	loginResp, err := authClient.Login(context.Background(), &quicktunv1.LoginRequest{
+		Email: "admin@x.com", Password: "pw",
+	})
+	require.NoError(t, err)
+
+	svcClient := quicktunv1.NewServiceServiceClient(conn)
+	authedCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+loginResp.AccessToken)
+	created, err := svcClient.CreateService(authedCtx, &quicktunv1.CreateServiceRequest{
+		Parent:    "projects/p1/sites/bastion",
+		ServiceId: "ssh",
+		Service: &quicktunv1.Service{
+			DisplayName: "SSH", TargetAddr: "127.0.0.1", TargetPort: 22,
+			Proto: quicktunv1.Proto_PROTO_TCP,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "projects/p1/sites/bastion/services/ssh", created.Name)
+	require.NotZero(t, created.RelayPort)
+
+	listed, err := svcClient.ListServices(authedCtx, &quicktunv1.ListServicesRequest{
+		Parent: "projects/p1/sites/bastion",
+	})
+	require.NoError(t, err)
+	require.Len(t, listed.Services, 1)
+}

@@ -126,9 +126,33 @@ if ! echo "$ROTATE_RESP" | grep -q '"token":'; then
   exit 1
 fi
 
+echo "site: PASS"
+
+# Service flow: create -> list -> delete
+SVC_RESP=$(curl -sS -X POST "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test/sites/smoke-bastion/services?service_id=ssh" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"displayName":"SSH","targetAddr":"127.0.0.1","targetPort":22,"proto":"PROTO_TCP"}')
+echo "service create: $SVC_RESP"
+if ! echo "$SVC_RESP" | grep -q '"name":"projects/smoke-test/sites/smoke-bastion/services/ssh"'; then
+  echo "FAIL: service create response missing expected name" >&2
+  exit 1
+fi
+if ! echo "$SVC_RESP" | grep -q '"relayPort":'; then
+  echo "FAIL: service create did not return relay_port" >&2
+  exit 1
+fi
+
+LIST_SVCS=$(curl -sS "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test/sites/smoke-bastion/services" \
+  -H "Authorization: Bearer $TOKEN")
+echo "service list: $LIST_SVCS"
+
+curl -sS -X DELETE "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test/sites/smoke-bastion/services/ssh" \
+  -H "Authorization: Bearer $TOKEN" > /dev/null
+echo "service: PASS"
+
 curl -sS -X DELETE "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test/sites/smoke-bastion" \
   -H "Authorization: Bearer $TOKEN" > /dev/null
-echo "site: PASS"
 
 # Delete project.
 curl -sS -X DELETE "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test" \
@@ -143,4 +167,4 @@ if [ "$GET_CODE" != "404" ]; then
   exit 1
 fi
 
-echo "PASS: end-to-end auth + project + site flow"
+echo "PASS: end-to-end auth + project + site + service flow"
