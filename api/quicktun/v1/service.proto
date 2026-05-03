@@ -1,0 +1,102 @@
+// ServiceService — CRUD for services (TCP forwarding rules under a site).
+syntax = "proto3";
+
+package quicktun.v1;
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+
+import "quicktun/v1/common.proto";
+
+option go_package = "github.com/tulip/quicktun/gen/go/quicktun/v1;quicktunv1";
+
+service ServiceService {
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse) {
+    option (google.api.http) = {
+      get: "/v1/{parent=projects/*/sites/*}/services"
+    };
+  }
+
+  rpc GetService(GetServiceRequest) returns (Service) {
+    option (google.api.http) = {
+      get: "/v1/{name=projects/*/sites/*/services/*}"
+    };
+  }
+
+  rpc CreateService(CreateServiceRequest) returns (Service) {
+    option (google.api.http) = {
+      post: "/v1/{parent=projects/*/sites/*}/services"
+      body: "service"
+    };
+  }
+
+  rpc UpdateService(UpdateServiceRequest) returns (Service) {
+    option (google.api.http) = {
+      patch: "/v1/{service.name=projects/*/sites/*/services/*}"
+      body: "service"
+    };
+  }
+
+  rpc DeleteService(DeleteServiceRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/v1/{name=projects/*/sites/*/services/*}"
+    };
+  }
+}
+
+enum Proto {
+  PROTO_UNSPECIFIED = 0;
+  PROTO_TCP         = 1;
+  PROTO_UDP         = 2;  // Phase 2
+}
+
+message Service {
+  // Resource name. Format: projects/{p}/sites/{s}/services/{svc}
+  string name = 1;
+
+  string service_id = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp create_time = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp update_time = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  string display_name = 10 [(google.api.field_behavior) = REQUIRED];
+  // target_addr is "127.0.0.1" (bastion's own SSH/etc) or a LAN IP the
+  // bastion can reach (e.g., "192.168.10.50").
+  string target_addr  = 11 [(google.api.field_behavior) = REQUIRED];
+  uint32 target_port  = 12 [(google.api.field_behavior) = REQUIRED];
+  Proto  proto        = 13;
+
+  // Output only: relay-side port allocated by the control plane.
+  uint32 relay_port   = 20 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+message ListServicesRequest {
+  string parent = 1 [(google.api.field_behavior) = REQUIRED];
+  PageRequest page = 2;
+}
+
+message ListServicesResponse {
+  repeated Service services = 1;
+  PageResponse page = 2;
+}
+
+message GetServiceRequest {
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CreateServiceRequest {
+  string parent = 1 [(google.api.field_behavior) = REQUIRED];
+  string service_id = 2 [(google.api.field_behavior) = REQUIRED];
+  Service service = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message UpdateServiceRequest {
+  Service service = 1 [(google.api.field_behavior) = REQUIRED];
+  google.protobuf.FieldMask update_mask = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+message DeleteServiceRequest {
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+}
