@@ -117,3 +117,109 @@ func TestListServicesNonAdminWithoutAccessDenied(t *testing.T) {
 	st, _ := status.FromError(err)
 	require.Equal(t, codes.NotFound, st.Code())
 }
+
+func TestCreateServiceSuccess(t *testing.T) {
+	db := openTestDB(t)
+	mkProjAndSite(t, db, "p1", "bastion")
+	svc := newServiceService(t, db)
+
+	resp, err := svc.CreateService(adminCtx(t, db), &quicktunv1.CreateServiceRequest{
+		Parent:    "projects/p1/sites/bastion",
+		ServiceId: "ssh",
+		Service: &quicktunv1.Service{
+			DisplayName: "SSH", TargetAddr: "127.0.0.1", TargetPort: 22,
+			Proto: quicktunv1.Proto_PROTO_TCP,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "projects/p1/sites/bastion/services/ssh", resp.Name)
+	require.NotZero(t, resp.RelayPort)
+	require.GreaterOrEqual(t, resp.RelayPort, uint32(20000))
+	require.LessOrEqual(t, resp.RelayPort, uint32(20099))
+
+	var audits []model.AuditLog
+	require.NoError(t, db.Where("action = ?", "service.create").Find(&audits).Error)
+	require.Len(t, audits, 1)
+}
+
+func TestCreateServiceRejectsDuplicate(t *testing.T) {
+	db := openTestDB(t)
+	mkProjAndSite(t, db, "p1", "bastion")
+	svc := newServiceService(t, db)
+	ctx := adminCtx(t, db)
+
+	req := &quicktunv1.CreateServiceRequest{
+		Parent: "projects/p1/sites/bastion", ServiceId: "ssh",
+		Service: &quicktunv1.Service{
+			DisplayName: "SSH", TargetAddr: "127.0.0.1", TargetPort: 22, Proto: quicktunv1.Proto_PROTO_TCP,
+		},
+	}
+	_, err := svc.CreateService(ctx, req)
+	require.NoError(t, err)
+	_, err = svc.CreateService(ctx, req)
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.AlreadyExists, st.Code())
+}
+
+func TestCreateServiceRejectsBadTarget(t *testing.T) {
+	db := openTestDB(t)
+	mkProjAndSite(t, db, "p1", "bastion")
+	svc := newServiceService(t, db)
+
+	_, err := svc.CreateService(adminCtx(t, db), &quicktunv1.CreateServiceRequest{
+		Parent: "projects/p1/sites/bastion", ServiceId: "x",
+		Service: &quicktunv1.Service{
+			DisplayName: "X",
+		},
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestCreateServicePortRangeExhausted(t *testing.T) {
+	db := openTestDB(t)
+	p, _ := dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "tiny", Name: "T", RelayPortRange: "20500-20500",
+	})
+	_, err := dao.NewSiteDAO(db).Create(context.Background(), &model.Site{ProjectID: p.ID, Name: "b"})
+	require.NoError(t, err)
+	svc := newServiceService(t, db)
+	ctx := adminCtx(t, db)
+
+	_, err = svc.CreateService(ctx, &quicktunv1.CreateServiceRequest{
+		Parent: "projects/tiny/sites/b", ServiceId: "a",
+		Service: &quicktunv1.Service{DisplayName: "A", TargetAddr: "127.0.0.1", TargetPort: 22, Proto: quicktunv1.Proto_PROTO_TCP},
+	})
+	require.NoError(t, err)
+	_, err = svc.CreateService(ctx, &quicktunv1.CreateServiceRequest{
+		Parent: "projects/tiny/sites/b", ServiceId: "b",
+		Service: &quicktunv1.Service{DisplayName: "B", TargetAddr: "127.0.0.1", TargetPort: 23, Proto: quicktunv1.Proto_PROTO_TCP},
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.ResourceExhausted, st.Code())
+}
+
+func TestCreateServiceRequiresAdmin(t *testing.T) {
+	db := openTestDB(t)
+	p, _ := dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "p1", Name: "P1", RelayPortRange: "20000-20099",
+	})
+	dao.NewSiteDAO(db).Create(context.Background(), &model.Site{ProjectID: p.ID, Name: "bastion"})
+	op := seedOperator(t, db, "u@x.com", "p", false)
+	require.NoError(t, db.Create(&model.OperatorProjectAccess{
+		OperatorID: op.ID, ProjectID: p.ID, Role: model.ProjectRoleOperator,
+	}).Error)
+	svc := newServiceService(t, db)
+
+	ctx := auth.WithOperator(context.Background(), op)
+	_, err := svc.CreateService(ctx, &quicktunv1.CreateServiceRequest{
+		Parent: "projects/p1/sites/bastion", ServiceId: "ssh",
+		Service: &quicktunv1.Service{DisplayName: "SSH", TargetAddr: "127.0.0.1", TargetPort: 22, Proto: quicktunv1.Proto_PROTO_TCP},
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.PermissionDenied, st.Code())
+}

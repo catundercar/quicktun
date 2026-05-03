@@ -178,3 +178,82 @@ func protoFromProto(p quicktunv1.Proto) model.Proto {
 	}
 	return ""
 }
+
+// CreateService implements quicktunv1.ServiceServiceServer.
+func (s *ServiceService) CreateService(ctx context.Context, req *quicktunv1.CreateServiceRequest) (*quicktunv1.Service, error) {
+	p, site, err := s.resolveSiteFromParent(ctx, req.GetParent())
+	if err != nil {
+		return nil, err
+	}
+	op := auth.OperatorFromContext(ctx)
+	if !op.IsAdmin {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
+	if req.GetService() == nil {
+		return nil, status.Error(codes.InvalidArgument, "service body is required")
+	}
+	if err := resource.ValidateSlug(req.GetServiceId()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if req.Service.GetTargetAddr() == "" {
+		return nil, status.Error(codes.InvalidArgument, "service.target_addr is required")
+	}
+	if req.Service.GetTargetPort() == 0 || req.Service.GetTargetPort() > 65535 {
+		return nil, status.Error(codes.InvalidArgument, "service.target_port must be 1-65535")
+	}
+
+	// Allocate a relay port from the project's range.
+	relayPort, err := s.services.AllocateRelayPort(ctx, p)
+	if err != nil {
+		if errors.Is(err, dao.ErrPortRangeExhausted) {
+			return nil, status.Error(codes.ResourceExhausted, "no relay ports available in project range")
+		}
+		return nil, status.Error(codes.Internal, "port allocation failed")
+	}
+
+	proto := protoFromProto(req.Service.Proto)
+	if proto == "" {
+		proto = model.ProtoTCP
+	}
+
+	row := &model.Service{
+		SiteID:     site.ID,
+		Name:       req.ServiceId,
+		TargetAddr: req.Service.TargetAddr,
+		TargetPort: uint16(req.Service.TargetPort),
+		Proto:      proto,
+		RelayPort:  &relayPort,
+	}
+	if _, err := s.services.Create(ctx, row); err != nil {
+		if isUniqueConstraintErr(err) {
+			return nil, status.Error(codes.AlreadyExists, "service already exists in site")
+		}
+		return nil, status.Error(codes.Internal, "create failed")
+	}
+
+	_ = s.audit.Log(ctx, audit.Entry{
+		ProjectID: ptrUint64(p.ID),
+		Action:    "service.create",
+		Target:    resource.FormatServiceName(p.Slug, site.Name, row.Name),
+		Extra: map[string]any{
+			"target":     row.TargetAddr + ":" + intToString(int(row.TargetPort)),
+			"relay_port": relayPort,
+		},
+	})
+
+	return serviceToProto(p, site, row), nil
+}
+
+func intToString(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [10]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
+}
