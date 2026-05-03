@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"gorm.io/gorm"
 
 	quicktunv1 "github.com/tulip/quicktun/gen/go/quicktun/v1"
@@ -218,6 +219,91 @@ func TestCreateServiceRequiresAdmin(t *testing.T) {
 	_, err := svc.CreateService(ctx, &quicktunv1.CreateServiceRequest{
 		Parent: "projects/p1/sites/bastion", ServiceId: "ssh",
 		Service: &quicktunv1.Service{DisplayName: "SSH", TargetAddr: "127.0.0.1", TargetPort: 22, Proto: quicktunv1.Proto_PROTO_TCP},
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.PermissionDenied, st.Code())
+}
+
+func TestUpdateServiceTarget(t *testing.T) {
+	db := openTestDB(t)
+	mkSvc(t, db, "p1", "bastion", "ssh")
+	svc := newServiceService(t, db)
+
+	resp, err := svc.UpdateService(adminCtx(t, db), &quicktunv1.UpdateServiceRequest{
+		Service: &quicktunv1.Service{
+			Name:       "projects/p1/sites/bastion/services/ssh",
+			TargetAddr: "192.168.10.50",
+			TargetPort: 2222,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"target_addr", "target_port"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "192.168.10.50", resp.TargetAddr)
+	require.Equal(t, uint32(2222), resp.TargetPort)
+}
+
+func TestUpdateServiceRequiresMask(t *testing.T) {
+	db := openTestDB(t)
+	mkSvc(t, db, "p1", "bastion", "ssh")
+	svc := newServiceService(t, db)
+
+	_, err := svc.UpdateService(adminCtx(t, db), &quicktunv1.UpdateServiceRequest{
+		Service: &quicktunv1.Service{Name: "projects/p1/sites/bastion/services/ssh", TargetAddr: "x"},
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestUpdateServiceRejectsRelayPort(t *testing.T) {
+	db := openTestDB(t)
+	mkSvc(t, db, "p1", "bastion", "ssh")
+	svc := newServiceService(t, db)
+
+	_, err := svc.UpdateService(adminCtx(t, db), &quicktunv1.UpdateServiceRequest{
+		Service: &quicktunv1.Service{
+			Name: "projects/p1/sites/bastion/services/ssh", RelayPort: 30000,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"relay_port"}},
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestDeleteServiceSuccess(t *testing.T) {
+	db := openTestDB(t)
+	mkSvc(t, db, "p1", "bastion", "ssh")
+	svc := newServiceService(t, db)
+	ctx := adminCtx(t, db)
+
+	_, err := svc.DeleteService(ctx, &quicktunv1.DeleteServiceRequest{
+		Name: "projects/p1/sites/bastion/services/ssh",
+	})
+	require.NoError(t, err)
+
+	_, err = svc.GetService(ctx, &quicktunv1.GetServiceRequest{
+		Name: "projects/p1/sites/bastion/services/ssh",
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.NotFound, st.Code())
+}
+
+func TestDeleteServiceRequiresAdmin(t *testing.T) {
+	db := openTestDB(t)
+	p, site, _ := mkSvc(t, db, "p1", "bastion", "ssh")
+	op := seedOperator(t, db, "u@x.com", "p", false)
+	require.NoError(t, db.Create(&model.OperatorProjectAccess{
+		OperatorID: op.ID, ProjectID: p.ID, Role: model.ProjectRoleViewer,
+	}).Error)
+	_ = site
+	svc := newServiceService(t, db)
+
+	ctx := auth.WithOperator(context.Background(), op)
+	_, err := svc.DeleteService(ctx, &quicktunv1.DeleteServiceRequest{
+		Name: "projects/p1/sites/bastion/services/ssh",
 	})
 	require.Error(t, err)
 	st, _ := status.FromError(err)

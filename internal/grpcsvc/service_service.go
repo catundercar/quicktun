@@ -6,6 +6,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	quicktunv1 "github.com/tulip/quicktun/gen/go/quicktun/v1"
@@ -256,4 +257,88 @@ func intToString(n int) string {
 		n /= 10
 	}
 	return string(b[i:])
+}
+
+// UpdateService implements quicktunv1.ServiceServiceServer.
+func (s *ServiceService) UpdateService(ctx context.Context, req *quicktunv1.UpdateServiceRequest) (*quicktunv1.Service, error) {
+	if req.GetService() == nil {
+		return nil, status.Error(codes.InvalidArgument, "service body is required")
+	}
+	if req.GetUpdateMask() == nil || len(req.UpdateMask.Paths) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "update_mask is required")
+	}
+	p, site, svc, err := s.resolveService(ctx, req.Service.GetName())
+	if err != nil {
+		return nil, err
+	}
+	op := auth.OperatorFromContext(ctx)
+	if !op.IsAdmin {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
+
+	changed := map[string]any{}
+	for _, path := range req.UpdateMask.Paths {
+		switch path {
+		case "display_name":
+			// Phase 1: Service.Name doubles as slug+label. Audit captures the request.
+			changed["display_name"] = req.Service.DisplayName
+		case "target_addr":
+			if req.Service.TargetAddr == "" {
+				return nil, status.Error(codes.InvalidArgument, "target_addr cannot be empty")
+			}
+			svc.TargetAddr = req.Service.TargetAddr
+			changed["target_addr"] = req.Service.TargetAddr
+		case "target_port":
+			if req.Service.TargetPort == 0 || req.Service.TargetPort > 65535 {
+				return nil, status.Error(codes.InvalidArgument, "target_port must be 1-65535")
+			}
+			svc.TargetPort = uint16(req.Service.TargetPort)
+			changed["target_port"] = req.Service.TargetPort
+		case "proto":
+			pr := protoFromProto(req.Service.Proto)
+			if pr == "" {
+				return nil, status.Error(codes.InvalidArgument, "proto must be TCP or UDP")
+			}
+			svc.Proto = pr
+			changed["proto"] = string(pr)
+		case "relay_port":
+			return nil, status.Error(codes.InvalidArgument, "relay_port is allocated by the server and cannot be updated")
+		default:
+			return nil, status.Errorf(codes.InvalidArgument, "unknown update_mask path: %q", path)
+		}
+	}
+
+	if err := s.services.Update(ctx, svc); err != nil {
+		return nil, status.Error(codes.Internal, "update failed")
+	}
+
+	_ = s.audit.Log(ctx, audit.Entry{
+		ProjectID: ptrUint64(p.ID),
+		Action:    "service.update",
+		Target:    resource.FormatServiceName(p.Slug, site.Name, svc.Name),
+		Extra:     changed,
+	})
+
+	return serviceToProto(p, site, svc), nil
+}
+
+// DeleteService implements quicktunv1.ServiceServiceServer.
+func (s *ServiceService) DeleteService(ctx context.Context, req *quicktunv1.DeleteServiceRequest) (*emptypb.Empty, error) {
+	p, site, svc, err := s.resolveService(ctx, req.GetName())
+	if err != nil {
+		return nil, err
+	}
+	op := auth.OperatorFromContext(ctx)
+	if !op.IsAdmin {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
+	if err := s.services.Delete(ctx, svc.ID); err != nil {
+		return nil, status.Error(codes.Internal, "delete failed")
+	}
+	_ = s.audit.Log(ctx, audit.Entry{
+		ProjectID: ptrUint64(p.ID),
+		Action:    "service.delete",
+		Target:    resource.FormatServiceName(p.Slug, site.Name, svc.Name),
+	})
+	return &emptypb.Empty{}, nil
 }
