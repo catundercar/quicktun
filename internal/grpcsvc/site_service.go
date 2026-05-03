@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -347,6 +348,65 @@ func (s *SiteService) RotateSiteAgentToken(ctx context.Context, req *quicktunv1.
 	})
 
 	resp := &quicktunv1.RotateSiteAgentTokenResponse{Token: raw}
+	if rec.ExpiresAt != nil {
+		resp.ExpireTime = timestamppb.New(*rec.ExpiresAt)
+	}
+	return resp, nil
+}
+
+// GetSiteInstallCommand implements quicktunv1.SiteServiceServer.
+//
+// Issues a fresh agent token (rotating any prior one) and returns a one-line
+// shell command operators paste on the bastion to bootstrap the agent.
+//
+// The token TTL is 1h — the window during which the agent must successfully
+// register. Subsequent agent calls use a long-lived token Issue'd by the
+// register handler (Plan N+).
+func (s *SiteService) GetSiteInstallCommand(ctx context.Context, req *quicktunv1.GetSiteInstallCommandRequest) (*quicktunv1.GetSiteInstallCommandResponse, error) {
+	p, site, err := s.resolveSite(ctx, req.GetName())
+	if err != nil {
+		return nil, err
+	}
+	op := auth.OperatorFromContext(ctx)
+	if !op.IsAdmin {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
+
+	osKind := req.GetOs()
+	if osKind == "" {
+		osKind = "linux"
+	}
+	if osKind != "linux" && osKind != "windows" {
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported os %q", osKind)
+	}
+
+	rec, raw, err := s.tokens.Issue(ctx, site.ID, 1*time.Hour)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "issue failed")
+	}
+
+	var cmd string
+	switch osKind {
+	case "linux":
+		cmd = "curl -fsSL https://relay.example.com/install/agent.sh | " +
+			"QT_TOKEN=" + raw + " QT_ENDPOINT=relay.example.com:443 bash"
+	case "windows":
+		cmd = `$env:QT_TOKEN="` + raw + `"; ` +
+			`$env:QT_ENDPOINT="relay.example.com:443"; ` +
+			`iwr -useb https://relay.example.com/install/agent.ps1 | iex`
+	}
+
+	_ = s.audit.Log(ctx, audit.Entry{
+		ProjectID: ptrUint64(p.ID),
+		Action:    "site.install_command",
+		Target:    resource.FormatSiteName(p.Slug, site.Name),
+		Extra:     map[string]any{"os": osKind},
+	})
+
+	resp := &quicktunv1.GetSiteInstallCommandResponse{
+		Command: cmd,
+		Token:   raw,
+	}
 	if rec.ExpiresAt != nil {
 		resp.ExpireTime = timestamppb.New(*rec.ExpiresAt)
 	}

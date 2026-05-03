@@ -368,3 +368,54 @@ func TestRotateSiteAgentTokenRequiresAdmin(t *testing.T) {
 	st, _ := status.FromError(err)
 	require.Equal(t, codes.PermissionDenied, st.Code())
 }
+
+func TestGetSiteInstallCommandLinux(t *testing.T) {
+	db := openTestDB(t)
+	mkProjAndSite(t, db, "p1", "install-target")
+	svc := newSiteService(t, db)
+
+	resp, err := svc.GetSiteInstallCommand(adminCtx(t, db), &quicktunv1.GetSiteInstallCommandRequest{
+		Name: "projects/p1/sites/install-target",
+		Os:   "linux",
+	})
+	require.NoError(t, err)
+	require.Contains(t, resp.Command, "curl")
+	require.Contains(t, resp.Command, "QT_TOKEN=")
+	require.NotEmpty(t, resp.Token)
+	require.Contains(t, resp.Command, "bash")
+}
+
+func TestGetSiteInstallCommandWindows(t *testing.T) {
+	db := openTestDB(t)
+	mkProjAndSite(t, db, "p1", "win-target")
+	svc := newSiteService(t, db)
+
+	resp, err := svc.GetSiteInstallCommand(adminCtx(t, db), &quicktunv1.GetSiteInstallCommandRequest{
+		Name: "projects/p1/sites/win-target",
+		Os:   "windows",
+	})
+	require.NoError(t, err)
+	require.Contains(t, resp.Command, "iwr")
+	require.Contains(t, resp.Command, "QT_TOKEN")
+}
+
+func TestGetSiteInstallCommandRequiresAdmin(t *testing.T) {
+	db := openTestDB(t)
+	p, _ := dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "p1", Name: "P1", RelayPortRange: "20000-20099",
+	})
+	dao.NewSiteDAO(db).Create(context.Background(), &model.Site{ProjectID: p.ID, Name: "x"})
+	op := seedOperator(t, db, "u@x.com", "p", false)
+	require.NoError(t, db.Create(&model.OperatorProjectAccess{
+		OperatorID: op.ID, ProjectID: p.ID, Role: model.ProjectRoleViewer,
+	}).Error)
+	svc := newSiteService(t, db)
+
+	ctx := auth.WithOperator(context.Background(), op)
+	_, err := svc.GetSiteInstallCommand(ctx, &quicktunv1.GetSiteInstallCommandRequest{
+		Name: "projects/p1/sites/x",
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.PermissionDenied, st.Code())
+}
