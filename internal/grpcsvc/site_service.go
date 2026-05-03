@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	quicktunv1 "github.com/tulip/quicktun/gen/go/quicktun/v1"
@@ -189,4 +190,97 @@ func siteStatusToProto(s model.SiteStatus) quicktunv1.SiteStatus {
 		return quicktunv1.SiteStatus_SITE_STATUS_OFFLINE
 	}
 	return quicktunv1.SiteStatus_SITE_STATUS_UNSPECIFIED
+}
+
+// CreateSite implements quicktunv1.SiteServiceServer.
+func (s *SiteService) CreateSite(ctx context.Context, req *quicktunv1.CreateSiteRequest) (*quicktunv1.Site, error) {
+	p, err := s.resolveProject(ctx, req.GetParent())
+	if err != nil {
+		return nil, err
+	}
+	op := auth.OperatorFromContext(ctx)
+	if !op.IsAdmin {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
+	if req.GetSite() == nil {
+		return nil, status.Error(codes.InvalidArgument, "site body is required")
+	}
+	if err := resource.ValidateSlug(req.GetSiteId()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if req.Site.GetDisplayName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "site.display_name is required")
+	}
+
+	var lanCidrsJSON string
+	if len(req.Site.LanCidrs) > 0 {
+		b, err := json.Marshal(req.Site.LanCidrs)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "lan_cidrs cannot be marshaled")
+		}
+		lanCidrsJSON = string(b)
+	}
+
+	row := &model.Site{
+		ProjectID:    p.ID,
+		Name:         req.SiteId,
+		Mode:         siteModeFromProto(req.Site.Mode),
+		Backend:      backendFromProto(req.Site.Backend),
+		Status:       model.SiteStatusPending,
+		LanCidrsJSON: lanCidrsJSON,
+	}
+	if row.Mode == "" {
+		row.Mode = p.DefaultMode
+	}
+	if row.Backend == "" {
+		row.Backend = p.Backend
+	}
+
+	if _, err := s.sites.Create(ctx, row); err != nil {
+		if isUniqueConstraintErr(err) {
+			return nil, status.Error(codes.AlreadyExists, "site already exists in project")
+		}
+		return nil, status.Error(codes.Internal, "create failed")
+	}
+
+	_ = s.audit.Log(ctx, audit.Entry{
+		ProjectID: ptrUint64(p.ID),
+		Action:    "site.create",
+		Target:    resource.FormatSiteName(p.Slug, row.Name),
+		Extra:     map[string]any{"display_name": req.Site.DisplayName},
+	})
+
+	return siteToProto(p, row), nil
+}
+
+// DeleteSite implements quicktunv1.SiteServiceServer.
+func (s *SiteService) DeleteSite(ctx context.Context, req *quicktunv1.DeleteSiteRequest) (*emptypb.Empty, error) {
+	p, site, err := s.resolveSite(ctx, req.GetName())
+	if err != nil {
+		return nil, err
+	}
+	op := auth.OperatorFromContext(ctx)
+	if !op.IsAdmin {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
+	if !req.GetForce() {
+		n, err := s.sites.CountServices(ctx, site.ID)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "service count failed")
+		}
+		if n > 0 {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"site has %d services; pass force=true", n)
+		}
+	}
+	if err := s.sites.Delete(ctx, site.ID); err != nil {
+		return nil, status.Error(codes.Internal, "delete failed")
+	}
+	_ = s.audit.Log(ctx, audit.Entry{
+		ProjectID: ptrUint64(p.ID),
+		Action:    "site.delete",
+		Target:    resource.FormatSiteName(p.Slug, site.Name),
+		Extra:     map[string]any{"force": req.GetForce()},
+	})
+	return &emptypb.Empty{}, nil
 }
