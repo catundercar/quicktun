@@ -12,8 +12,10 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	quicktunv1 "github.com/tulip/quicktun/gen/go/quicktun/v1"
 	"github.com/tulip/quicktun/internal/supervisor"
@@ -22,7 +24,12 @@ import (
 const (
 	defaultBootstrapRetry = 5 * time.Second
 	maxBootstrapBackoff   = 1 * time.Minute
-	defaultHeartbeat      = 15 * time.Second
+	// maxBootstrapAttempts caps the retry loop so a permanently misconfigured
+	// agent (wrong endpoint, wrong token, server permanently down) eventually
+	// exits with an error instead of spinning forever — letting systemd report
+	// service failure and operators notice.
+	maxBootstrapAttempts = 10
+	defaultHeartbeat     = 15 * time.Second
 )
 
 // AgentVersion is the version string the agent reports in Bootstrap and
@@ -32,6 +39,8 @@ var AgentVersion = "dev"
 // Runtime is the long-running agent. Construct with New, drive with Run,
 // release resources with Close. Run blocks until ctx is cancelled.
 type Runtime struct {
+	// cfg is read-only after New returns — Run, heartbeat, applyBootstrap,
+	// startSupervisor all read it without locks. Do not mutate.
 	cfg *Config
 	lg  *zap.Logger
 
@@ -40,6 +49,11 @@ type Runtime struct {
 
 	// supMu guards the supervisor lifecycle fields (cancel + done) and
 	// curVersion. Heartbeat reads curVersion, applyBootstrap writes both.
+	// Invariant: at most one supervisor goroutine is alive at a time.
+	// startSupervisor publishes (supCancel, supDone) under the lock;
+	// stopSupervisor swaps both to nil under the lock and then waits on
+	// the snapshotted done channel after releasing it (so the goroutine
+	// can finish without blocking on supMu).
 	supMu      sync.Mutex
 	supCancel  context.CancelFunc
 	supDone    chan struct{}
@@ -55,6 +69,10 @@ func New(cfg *Config, lg *zap.Logger) (*Runtime, error) {
 	if lg == nil {
 		lg = zap.NewNop()
 	}
+	// MkdirAll is idempotent and surfaces permission errors, but it does
+	// NOT verify the directory is writable when it already exists with the
+	// wrong owner/mode. A future hardening pass could add an explicit
+	// writability probe (e.g. open a temp file) here.
 	if err := os.MkdirAll(cfg.StateDir, 0o755); err != nil {
 		return nil, fmt.Errorf("agent: mkdir state dir: %w", err)
 	}
@@ -63,7 +81,10 @@ func New(cfg *Config, lg *zap.Logger) (*Runtime, error) {
 	if cfg.TLSInsecure {
 		transport = insecure.NewCredentials()
 	} else {
-		transport = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+		// TLS 1.3 is the secure default; if a deployment ever needs 1.2
+		// (e.g. legacy load balancer in front of the control plane) we'll
+		// add a config opt-in rather than weakening the default.
+		transport = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS13})
 	}
 
 	conn, err := grpc.NewClient(cfg.ControlEndpoint,
@@ -124,6 +145,10 @@ func (r *Runtime) Run(ctx context.Context) error {
 					r.stopSupervisor()
 					return nil
 				}
+				// Future: escalate after N consecutive failures (e.g. log at
+				// Error level, or surface to a healthcheck endpoint). For
+				// now we log every failure at Warn and keep ticking — the
+				// supervisor keeps running on the last applied config.
 				r.lg.Warn("agent: heartbeat failed", zap.Error(err))
 				continue
 			}
@@ -142,11 +167,14 @@ func (r *Runtime) Run(ctx context.Context) error {
 	}
 }
 
-// bootstrapWithRetry calls Bootstrap with exponential backoff until either
-// it succeeds or ctx is cancelled.
+// bootstrapWithRetry calls Bootstrap with exponential backoff. It gives up
+// after maxBootstrapAttempts so a misconfigured agent eventually exits and
+// systemd surfaces the failure, and short-circuits immediately on
+// codes.Unauthenticated since waiting won't fix a bad token.
 func (r *Runtime) bootstrapWithRetry(ctx context.Context) (*quicktunv1.BootstrapResponse, error) {
 	backoff := defaultBootstrapRetry
-	for {
+	var lastErr error
+	for attempt := 1; attempt <= maxBootstrapAttempts; attempt++ {
 		resp, err := r.cli.Bootstrap(ctx, &quicktunv1.BootstrapRequest{
 			Hostname:     r.hostname(),
 			Os:           runtime.GOOS,
@@ -155,10 +183,17 @@ func (r *Runtime) bootstrapWithRetry(ctx context.Context) (*quicktunv1.Bootstrap
 		if err == nil {
 			return resp, nil
 		}
+		lastErr = err
+		// A bad token won't get better — fail fast so the operator sees it.
+		if status.Code(err) == codes.Unauthenticated {
+			return nil, fmt.Errorf("agent: bootstrap rejected (token invalid?): %w", err)
+		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		r.lg.Warn("agent: bootstrap failed; retrying",
+			zap.Int("attempt", attempt),
+			zap.Int("max_attempts", maxBootstrapAttempts),
 			zap.Error(err), zap.Duration("backoff", backoff))
 		select {
 		case <-ctx.Done():
@@ -170,6 +205,7 @@ func (r *Runtime) bootstrapWithRetry(ctx context.Context) (*quicktunv1.Bootstrap
 			backoff = maxBootstrapBackoff
 		}
 	}
+	return nil, fmt.Errorf("agent: bootstrap failed after %d attempts: %w", maxBootstrapAttempts, lastErr)
 }
 
 func (r *Runtime) heartbeat(ctx context.Context) (*quicktunv1.HeartbeatResponse, error) {

@@ -4,15 +4,20 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
@@ -23,6 +28,22 @@ import (
 	"github.com/tulip/quicktun/internal/grpcsvc"
 	"github.com/tulip/quicktun/internal/model"
 )
+
+// buildFakeBin compiles the supervisor's testfakebin into a temp path so the
+// agent has a real subprocess to spawn for supervisor lifecycle tests.
+// Mirrors internal/relay/manager_test.go::buildFakeBin.
+func buildFakeBin(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	out := filepath.Join(dir, "fakebin")
+	wd, _ := os.Getwd()
+	cmd := exec.Command("go", "build", "-o", out, "../supervisor/testfakebin")
+	cmd.Dir = wd
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("build fake bin: %v", err)
+	}
+	return out
+}
 
 // startAgentTestServer spins up a tiny in-process gRPC server that hosts
 // only AgentService + AgentInterceptor. Returns its listen address and a
@@ -146,6 +167,162 @@ func TestRuntimeBootstrapAndRender(t *testing.T) {
 	case err := <-runErr:
 		require.NoError(t, err)
 	case <-time.After(3 * time.Second):
+		t.Fatal("runtime.Run did not return after ctx cancel")
+	}
+}
+
+// stubAgentServer is a minimal AgentServiceServer that lets a test drive
+// the runtime's bootstrap → heartbeat → rebootstrap state machine without
+// the real DAO + 15-second heartbeat cadence baked into AgentService.
+//
+// It serves two Bootstrap responses (first → "v1" with one tunnel, second →
+// "v2" with two tunnels) and a Heartbeat that returns ShouldRebootstrap
+// once per "epoch": the test can trigger a rebootstrap by calling
+// triggerRebootstrap. The HeartbeatSeconds is set to 1 so the runtime's
+// ticker fires sub-second.
+type stubAgentServer struct {
+	quicktunv1.UnimplementedAgentServiceServer
+	mu sync.Mutex
+	// epoch increments each time triggerRebootstrap is called. Heartbeat
+	// returns ShouldRebootstrap=true while heartbeatEpoch < epoch, then
+	// flips it back to false once the agent rebootstraps.
+	epoch          int
+	heartbeatEpoch int
+	bootstrapCalls int
+}
+
+func (s *stubAgentServer) Bootstrap(_ context.Context, _ *quicktunv1.BootstrapRequest) (*quicktunv1.BootstrapResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bootstrapCalls++
+	// Mirror the agent's view of the world: epoch 0 has just "ssh"; epoch >=1
+	// adds "http" alongside it.
+	tunnels := []*quicktunv1.TunnelBinding{
+		{ServiceSlug: "ssh", TargetAddr: "127.0.0.1", TargetPort: 22, Proto: "tcp", RelayPort: 20001},
+	}
+	if s.epoch >= 1 {
+		tunnels = append(tunnels, &quicktunv1.TunnelBinding{
+			ServiceSlug: "http", TargetAddr: "127.0.0.1", TargetPort: 80, Proto: "tcp", RelayPort: 20002,
+		})
+	}
+	s.heartbeatEpoch = s.epoch
+	return &quicktunv1.BootstrapResponse{
+		SiteName:           "proj/bastion-1",
+		ProjectSlug:        "proj",
+		SiteSlug:           "bastion-1",
+		RatholeControlAddr: "relay.test:20000",
+		Tunnels:            tunnels,
+		HeartbeatSeconds:   1, // fast loop for tests
+		ConfigVersion:      fmt.Sprintf("v%d", s.epoch),
+	}, nil
+}
+
+func (s *stubAgentServer) Heartbeat(_ context.Context, _ *quicktunv1.HeartbeatRequest) (*quicktunv1.HeartbeatResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return &quicktunv1.HeartbeatResponse{
+		ShouldRebootstrap: s.heartbeatEpoch != s.epoch,
+		ServerTime:        timestamppb.Now(),
+	}, nil
+}
+
+func (s *stubAgentServer) triggerRebootstrap() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.epoch++
+}
+
+func (s *stubAgentServer) bootstrapCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bootstrapCalls
+}
+
+// startStubAgentServer hosts the stub on 127.0.0.1:<random> with the real
+// AgentInterceptor disabled (the stub doesn't read the principal). Returns
+// the listen address.
+func startStubAgentServer(t *testing.T, stub *stubAgentServer) string {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv := grpc.NewServer()
+	quicktunv1.RegisterAgentServiceServer(srv, stub)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	return lis.Addr().String()
+}
+
+// TestRuntimeRestartsSupervisorOnRebootstrap exercises the rebootstrap
+// path end-to-end: agent spawns the fake rathole subprocess, then a stub
+// server flips ShouldRebootstrap=true and returns a Bootstrap response with
+// a different tunnel set. The runtime must call applyBootstrap a second
+// time, which renders new toml, stops the old supervisor, and starts a new
+// one. We assert (a) the rendered toml on disk now contains the new tunnel
+// slug, (b) Bootstrap was called exactly twice, and (c) Run returns
+// cleanly on cancel — the second supervisor goroutine must terminate.
+func TestRuntimeRestartsSupervisorOnRebootstrap(t *testing.T) {
+	bin := buildFakeBin(t)
+	stub := &stubAgentServer{}
+	addr := startStubAgentServer(t, stub)
+
+	stateDir := t.TempDir()
+	cfg := &agent.Config{
+		ControlEndpoint:  addr,
+		Token:            "dummy-token-for-stub-server",
+		StateDir:         stateDir,
+		RatholeBinary:    bin,
+		RatholeArgs:      []string{"--mode=sleep"},
+		TLSInsecure:      true,
+		HostnameOverride: "test-bastion",
+	}
+
+	rt, err := agent.New(cfg, zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rt.Close() })
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- rt.Run(runCtx) }()
+
+	cfgPath := filepath.Join(stateDir, "rathole-client.toml")
+
+	// First render: only "ssh".
+	require.Eventually(t, func() bool {
+		body, err := os.ReadFile(cfgPath)
+		if err != nil {
+			return false
+		}
+		s := string(body)
+		return strings.Contains(s, "bastion-1__ssh") && !strings.Contains(s, "bastion-1__http")
+	}, 5*time.Second, 50*time.Millisecond, "first render missing ssh tunnel")
+
+	// Trigger rebootstrap: epoch++ so the next Heartbeat returns
+	// ShouldRebootstrap=true and the next Bootstrap returns the new
+	// tunnel set.
+	stub.triggerRebootstrap()
+
+	// Second render: both "ssh" and "http". HeartbeatSeconds=1 in the
+	// stub response keeps this fast.
+	require.Eventually(t, func() bool {
+		body, err := os.ReadFile(cfgPath)
+		if err != nil {
+			return false
+		}
+		s := string(body)
+		return strings.Contains(s, "bastion-1__ssh") && strings.Contains(s, "bastion-1__http")
+	}, 10*time.Second, 100*time.Millisecond, "rebootstrap did not re-render with new tunnel")
+
+	// Bootstrap should have run exactly twice (initial + rebootstrap).
+	require.Equal(t, 2, stub.bootstrapCount(), "expected exactly two Bootstrap calls")
+
+	// Tear down: cancel and verify Run returns promptly. If the second
+	// supervisor goroutine were leaked, Close() (via t.Cleanup) would
+	// hang on the supDone receive — we let that be the implicit assertion.
+	cancel()
+	select {
+	case err := <-runErr:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
 		t.Fatal("runtime.Run did not return after ctx cancel")
 	}
 }
