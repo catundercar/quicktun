@@ -6,7 +6,6 @@ package supervisor
 import (
 	"bufio"
 	"context"
-	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -101,7 +100,7 @@ func (s *Supervisor) Run(ctx context.Context) {
 }
 
 func (s *Supervisor) runOnce(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, s.spec.Binary, s.spec.Args...)
+	cmd := exec.Command(s.spec.Binary, s.spec.Args...)
 	if len(s.spec.Env) > 0 {
 		cmd.Env = append(os.Environ(), s.spec.Env...)
 	}
@@ -129,14 +128,33 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	go func() { defer wg.Done(); s.pipe(stdout, "stdout") }()
 	go func() { defer wg.Done(); s.pipe(stderr, "stderr") }()
 
+	// On ctx cancel: SIGTERM, wait up to 5s for graceful exit, then SIGKILL.
+	waitDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			if cmd.Process != nil {
+				_ = cmd.Process.Signal(termSignal)
+				select {
+				case <-waitDone:
+					// child exited within grace window
+				case <-time.After(5 * time.Second):
+					_ = cmd.Process.Kill()
+				}
+			}
+		case <-waitDone:
+		}
+	}()
+
 	waitErr := cmd.Wait()
+	close(waitDone)
 	wg.Wait()
 
 	s.mu.Lock()
 	s.cmd = nil
 	s.mu.Unlock()
 
-	if waitErr != nil && errors.Is(waitErr, context.Canceled) {
+	if ctx.Err() != nil {
 		return nil
 	}
 	return waitErr

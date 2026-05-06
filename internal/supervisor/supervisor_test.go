@@ -129,6 +129,57 @@ func TestSupervisorBackoff(t *testing.T) {
 	require.Greater(t, startCount, 1, "expected at least 2 restarts (startCount=%d)", startCount)
 }
 
+func TestSupervisorSendsSIGTERMOnCancel(t *testing.T) {
+	bin := buildFakeBin(t)
+
+	logCh := make(chan string, 16)
+	sup := supervisor.New(supervisor.Spec{
+		Name:   "fake-graceful",
+		Binary: bin,
+		Args:   []string{"--mode=sleep"},
+		OnLog:  func(line, src string) { logCh <- line },
+	}, zap.NewNop())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { sup.Run(ctx); close(done) }()
+
+	// Wait for "fake: ready" so we know the child is running.
+	deadline := time.After(2 * time.Second)
+readyLoop:
+	for {
+		select {
+		case line := <-logCh:
+			if line == "fake: ready" {
+				break readyLoop
+			}
+		case <-deadline:
+			t.Fatal("never saw 'ready'")
+		}
+	}
+
+	cancel()
+
+	// fake binary writes "fake: stopping" on SIGTERM. If we get there, SIGTERM
+	// arrived and the grace window worked.
+	deadline = time.After(3 * time.Second)
+	for {
+		select {
+		case line := <-logCh:
+			if line == "fake: stopping" {
+				select {
+				case <-done:
+				case <-time.After(2 * time.Second):
+					t.Fatal("supervisor goroutine did not exit after graceful child stop")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("never saw 'stopping' — SIGTERM not delivered or grace period broken")
+		}
+	}
+}
+
 func TestSupervisorBinaryNotFound(t *testing.T) {
 	sup := supervisor.New(supervisor.Spec{
 		Name:   "missing",
