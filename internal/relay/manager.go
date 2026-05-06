@@ -142,6 +142,16 @@ func (m *Manager) AddProject(ctx context.Context, projectID uint64) error {
 	return m.spawn(ctx, projectID, rootCtx)
 }
 
+// ratholeSpawnArgs builds the argv tail for spawning rathole. rathole's CLI
+// requires flags (e.g. "--server") BEFORE the positional config path, so
+// `BinaryArgs` are placed first and the rendered config path last. We copy
+// `binaryArgs` into a fresh slice so the returned slice never aliases the
+// caller's backing array (a subsequent `append` would otherwise mutate it).
+func ratholeSpawnArgs(binaryArgs []string, cfgPath string) []string {
+	out := append([]string{}, binaryArgs...)
+	return append(out, cfgPath)
+}
+
 // spawn renders the config and (when Binary is set) starts a supervisor
 // goroutine. Caller is responsible for ensuring no other supervisor exists
 // for projectID — typically by holding a higher-level invariant such as the
@@ -163,7 +173,7 @@ func (m *Manager) spawn(ctx context.Context, projectID uint64, rootCtx context.C
 	sup := supervisor.New(supervisor.Spec{
 		Name:   fmt.Sprintf("rathole-project-%d", projectID),
 		Binary: m.cfg.Binary,
-		Args:   append([]string{cfgPath}, m.cfg.BinaryArgs...),
+		Args:   ratholeSpawnArgs(m.cfg.BinaryArgs, cfgPath),
 		OnLog: func(line, src string) {
 			m.lg.Info("relay child log",
 				zap.Uint64("project_id", projectID),
