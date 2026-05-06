@@ -375,11 +375,23 @@ func (s *ProjectService) UpdateProject(ctx context.Context, req *quicktunv1.Upda
 		Extra:     changed,
 	})
 
-	if err := s.relay.Refresh(ctx, cur.ID); err != nil {
-		s.lg.Warn("relay refresh failed",
-			zap.Uint64("project_id", cur.ID),
-			zap.String("op", "project.update"),
-			zap.Error(err))
+	switch cur.Status {
+	case model.ProjectStatusActive:
+		if err := s.relay.Refresh(ctx, cur.ID); err != nil {
+			s.lg.Warn("relay refresh failed",
+				zap.Uint64("project_id", cur.ID),
+				zap.String("op", "project.update"),
+				zap.Error(err))
+		}
+	case model.ProjectStatusDisabled:
+		if err := s.relay.RemoveProject(ctx, cur.ID); err != nil {
+			s.lg.Warn("relay remove failed",
+				zap.Uint64("project_id", cur.ID),
+				zap.String("op", "project.update.disable"),
+				zap.Error(err))
+		}
+	default:
+		// No relay action for unknown/future statuses — safe no-op.
 	}
 
 	return projectToProto(cur), nil

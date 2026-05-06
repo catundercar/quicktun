@@ -408,3 +408,43 @@ func TestDeleteProjectForceWithSites(t *testing.T) {
 	})
 	require.NoError(t, err)
 }
+
+func TestUpdateProjectDisabledTearsDownSupervisor(t *testing.T) {
+	db := openTestDB(t)
+	rec := &recordingRelay{}
+	svc := grpcsvc.NewProjectService(dao.NewProjectDAO(db), audit.NewWriter(db), zap.NewNop(), rec)
+	ctx := adminCtx(t, db)
+
+	created, err := svc.CreateProject(ctx, &quicktunv1.CreateProjectRequest{
+		ProjectId: "p1",
+		Project: &quicktunv1.Project{
+			DisplayName: "P1", RelayPortRange: "20000-20099",
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, rec.added, 1)
+
+	// Disable — must call RemoveProject, not Refresh.
+	_, err = svc.UpdateProject(ctx, &quicktunv1.UpdateProjectRequest{
+		Project: &quicktunv1.Project{
+			Name:   created.Name,
+			Status: quicktunv1.ProjectStatus_PROJECT_STATUS_DISABLED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status"}},
+	})
+	require.NoError(t, err)
+	require.Len(t, rec.removed, 1, "disabled project must trigger RemoveProject")
+	require.Empty(t, rec.refreshed, "disabled project must NOT trigger Refresh")
+
+	// Re-enable — must call Refresh, not RemoveProject again.
+	_, err = svc.UpdateProject(ctx, &quicktunv1.UpdateProjectRequest{
+		Project: &quicktunv1.Project{
+			Name:   created.Name,
+			Status: quicktunv1.ProjectStatus_PROJECT_STATUS_ACTIVE,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status"}},
+	})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(rec.refreshed), 1, "re-enabled project must trigger Refresh")
+	require.Len(t, rec.removed, 1, "re-enabling must NOT call RemoveProject again")
+}
