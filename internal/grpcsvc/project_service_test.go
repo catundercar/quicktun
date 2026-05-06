@@ -190,16 +190,22 @@ func TestCreateProjectRejectsDuplicate(t *testing.T) {
 	svc := newProjectService(t, db)
 	ctx := adminCtx(t, db)
 
-	req := &quicktunv1.CreateProjectRequest{
+	_, err := svc.CreateProject(ctx, &quicktunv1.CreateProjectRequest{
 		ProjectId: "dup-slug",
 		Project: &quicktunv1.Project{
 			DisplayName: "First", RelayPortRange: "20000-20099",
 		},
-	}
-	_, err := svc.CreateProject(ctx, req)
+	})
 	require.NoError(t, err)
 
-	_, err = svc.CreateProject(ctx, req)
+	// Use a non-overlapping range so the overlap check passes and we reach
+	// the slug uniqueness constraint in the DB.
+	_, err = svc.CreateProject(ctx, &quicktunv1.CreateProjectRequest{
+		ProjectId: "dup-slug",
+		Project: &quicktunv1.Project{
+			DisplayName: "Second", RelayPortRange: "30000-30099",
+		},
+	})
 	require.Error(t, err)
 	st, _ := status.FromError(err)
 	require.Equal(t, codes.AlreadyExists, st.Code())
@@ -361,6 +367,30 @@ func TestProjectServiceCallsRelayManager(t *testing.T) {
 	_, err = svc.DeleteProject(ctx, &quicktunv1.DeleteProjectRequest{Name: created.Name})
 	require.NoError(t, err)
 	require.Len(t, rec.removed, 1)
+}
+
+func TestCreateProjectRejectsOverlappingRange(t *testing.T) {
+	db := openTestDB(t)
+	svc := newProjectService(t, db)
+	ctx := adminCtx(t, db)
+
+	_, err := svc.CreateProject(ctx, &quicktunv1.CreateProjectRequest{
+		ProjectId: "p1",
+		Project: &quicktunv1.Project{
+			DisplayName: "P1", RelayPortRange: "20000-20099",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.CreateProject(ctx, &quicktunv1.CreateProjectRequest{
+		ProjectId: "p2",
+		Project: &quicktunv1.Project{
+			DisplayName: "P2", RelayPortRange: "20050-20149",
+		},
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.FailedPrecondition, st.Code())
 }
 
 func TestDeleteProjectForceWithSites(t *testing.T) {

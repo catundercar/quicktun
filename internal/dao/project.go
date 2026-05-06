@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/tulip/quicktun/internal/model"
+	"github.com/tulip/quicktun/internal/resource"
 )
 
 // ErrInvalidPageToken is returned by List* methods when a page token cannot
@@ -119,6 +120,29 @@ func (d *ProjectDAO) CountSites(ctx context.Context, projectID uint64) (int64, e
 		return 0, fmt.Errorf("dao: count sites: %w", err)
 	}
 	return n, nil
+}
+
+// OverlapsAny returns true if minP..maxP overlaps any *other* project's range.
+// excludeID is the project we're updating (pass 0 on create).
+func (d *ProjectDAO) OverlapsAny(ctx context.Context, minP, maxP uint16, excludeID uint64) (bool, error) {
+	var rows []model.Project
+	q := d.db.WithContext(ctx)
+	if excludeID != 0 {
+		q = q.Where("id <> ?", excludeID)
+	}
+	if err := q.Find(&rows).Error; err != nil {
+		return false, err
+	}
+	for _, p := range rows {
+		oMin, oMax, err := resource.ParsePortRange(p.RelayPortRange)
+		if err != nil {
+			continue // drift; ignore
+		}
+		if minP <= oMax && oMin <= maxP {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Db returns the underlying *gorm.DB. Service handlers use this for

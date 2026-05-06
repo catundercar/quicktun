@@ -192,6 +192,18 @@ func (s *ProjectService) CreateProject(ctx context.Context, req *quicktunv1.Crea
 	if req.Project.GetRelayPortRange() == "" {
 		return nil, status.Error(codes.InvalidArgument, "project.relay_port_range is required")
 	}
+	minP, maxP, err := resource.ParsePortRange(req.Project.RelayPortRange)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "relay_port_range: %v", err)
+	}
+	overlap, err := s.projects.OverlapsAny(ctx, minP, maxP, 0)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "overlap check: %v", err)
+	}
+	if overlap {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"relay_port_range %q overlaps another project's range", req.Project.RelayPortRange)
+	}
 
 	row := &model.Project{
 		Slug:           req.ProjectId,
@@ -311,6 +323,18 @@ func (s *ProjectService) UpdateProject(ctx context.Context, req *quicktunv1.Upda
 		case "relay_port_range":
 			if req.Project.RelayPortRange == "" {
 				return nil, status.Error(codes.InvalidArgument, "relay_port_range cannot be empty")
+			}
+			rMin, rMax, parseErr := resource.ParsePortRange(req.Project.RelayPortRange)
+			if parseErr != nil {
+				return nil, status.Errorf(codes.InvalidArgument, "relay_port_range: %v", parseErr)
+			}
+			overlap, overlapErr := s.projects.OverlapsAny(ctx, rMin, rMax, cur.ID)
+			if overlapErr != nil {
+				return nil, status.Errorf(codes.Internal, "overlap check: %v", overlapErr)
+			}
+			if overlap {
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"relay_port_range %q overlaps another project's range", req.Project.RelayPortRange)
 			}
 			cur.RelayPortRange = req.Project.RelayPortRange
 			changed["relay_port_range"] = req.Project.RelayPortRange
