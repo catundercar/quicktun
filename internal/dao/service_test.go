@@ -74,27 +74,44 @@ func TestAllocateRelayPortAssignsLowestFree(t *testing.T) {
 	store := dao.NewServiceDAO(db)
 	ctx := context.Background()
 
-	rp1 := uint16(20000)
-	rp2 := uint16(20002)
+	// 20000 is reserved for the rathole control port — first service-allocatable
+	// port is 20001. Pre-seed 20001 and 20003 to force allocation to return 20002.
+	rp1 := uint16(20001)
+	rp2 := uint16(20003)
 	_, _ = store.Create(ctx, &model.Service{SiteID: s.ID, Name: "a", TargetAddr: "127.0.0.1", TargetPort: 22, Proto: model.ProtoTCP, RelayPort: &rp1})
 	_, _ = store.Create(ctx, &model.Service{SiteID: s.ID, Name: "b", TargetAddr: "127.0.0.1", TargetPort: 23, Proto: model.ProtoTCP, RelayPort: &rp2})
 
 	port, err := store.AllocateRelayPort(ctx, p)
+	require.NoError(t, err)
+	require.Equal(t, uint16(20002), port)
+}
+
+func TestAllocateRelayPortSkipsControlPort(t *testing.T) {
+	// Brand-new project: no allocations yet. The first port handed out must
+	// skip minP (reserved for rathole control) and return minP+1.
+	db := openWithModels(t)
+	p, _ := dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "p", Name: "P", RelayPortRange: "20000-20099",
+	})
+	store := dao.NewServiceDAO(db)
+	port, err := store.AllocateRelayPort(context.Background(), p)
 	require.NoError(t, err)
 	require.Equal(t, uint16(20001), port)
 }
 
 func TestAllocateRelayPortExhausted(t *testing.T) {
 	db := openWithModels(t)
+	// Range 20000-20002: 20000 is the control port, leaving 20001 and 20002
+	// for services. Filling both must exhaust the range.
 	p, _ := dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
-		Slug: "p", Name: "P", RelayPortRange: "20000-20001",
+		Slug: "p", Name: "P", RelayPortRange: "20000-20002",
 	})
 	s, _ := dao.NewSiteDAO(db).Create(context.Background(), &model.Site{ProjectID: p.ID, Name: "b"})
 	store := dao.NewServiceDAO(db)
 	ctx := context.Background()
 
-	a := uint16(20000)
-	b := uint16(20001)
+	a := uint16(20001)
+	b := uint16(20002)
 	_, _ = store.Create(ctx, &model.Service{SiteID: s.ID, Name: "x", TargetAddr: "127.0.0.1", TargetPort: 22, Proto: model.ProtoTCP, RelayPort: &a})
 	_, _ = store.Create(ctx, &model.Service{SiteID: s.ID, Name: "y", TargetAddr: "127.0.0.1", TargetPort: 23, Proto: model.ProtoTCP, RelayPort: &b})
 

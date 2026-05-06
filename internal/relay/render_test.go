@@ -59,3 +59,22 @@ func TestRenderRatholeServerRejectsBadRange(t *testing.T) {
 	_, err := relay.RenderRatholeServer(p, nil)
 	require.Error(t, err)
 }
+
+func TestRenderRatholeServerEscapesAgentToken(t *testing.T) {
+	p := &model.Project{
+		Base: model.Base{ID: 1}, Slug: "p", RelayPortRange: "20000-20099",
+	}
+	rp := uint16(20022)
+	out, err := relay.RenderRatholeServer(p, []relay.ServiceBinding{
+		{
+			SiteSlug:    "site",
+			ServiceSlug: "ssh",
+			RelayPort:   rp,
+			AgentToken:  "evil\"\nbind_addr = \"injected",
+		},
+	})
+	require.NoError(t, err)
+	// The injection attempt must NOT produce a second top-level bind_addr line.
+	// The legitimate bind_addr lines are exactly: control + 1 service = 2 total.
+	require.Equal(t, 2, strings.Count(out, "\nbind_addr ="))
+}

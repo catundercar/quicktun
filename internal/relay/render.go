@@ -4,10 +4,11 @@ package relay
 
 import (
 	"fmt"
-	"strconv"
+	"sort"
 	"strings"
 
 	"github.com/tulip/quicktun/internal/model"
+	"github.com/tulip/quicktun/internal/resource"
 )
 
 // ServiceBinding is a flattened (site, service, agent_token) tuple ready for
@@ -25,11 +26,20 @@ type ServiceBinding struct {
 // project's relay_port_range. Service ports occupy the rest of the range.
 // All binds are 127.0.0.1 so external traffic must go through the auth-proxy
 // (Plan 8) to reach rathole.
+//
+// RenderRatholeServer sorts bindings in-place for deterministic output.
 func RenderRatholeServer(p *model.Project, bindings []ServiceBinding) (string, error) {
-	minP, _, err := parsePortRange(p.RelayPortRange)
+	minP, _, err := resource.ParsePortRange(p.RelayPortRange)
 	if err != nil {
 		return "", fmt.Errorf("relay: %w", err)
 	}
+
+	sort.SliceStable(bindings, func(i, j int) bool {
+		if bindings[i].SiteSlug != bindings[j].SiteSlug {
+			return bindings[i].SiteSlug < bindings[j].SiteSlug
+		}
+		return bindings[i].ServiceSlug < bindings[j].ServiceSlug
+	})
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# quicktun-rendered config for project %q (id=%d)\n",
@@ -48,23 +58,4 @@ func RenderRatholeServer(p *model.Project, bindings []ServiceBinding) (string, e
 	}
 
 	return b.String(), nil
-}
-
-func parsePortRange(s string) (uint16, uint16, error) {
-	parts := strings.SplitN(s, "-", 2)
-	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("invalid port range %q", s)
-	}
-	minI, err := strconv.ParseUint(strings.TrimSpace(parts[0]), 10, 16)
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid min port: %w", err)
-	}
-	maxI, err := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 16)
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid max port: %w", err)
-	}
-	if minI > maxI {
-		return 0, 0, fmt.Errorf("min %d > max %d", minI, maxI)
-	}
-	return uint16(minI), uint16(maxI), nil
 }

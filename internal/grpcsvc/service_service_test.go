@@ -136,7 +136,8 @@ func TestCreateServiceSuccess(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "projects/p1/sites/bastion/services/ssh", resp.Name)
 	require.NotZero(t, resp.RelayPort)
-	require.GreaterOrEqual(t, resp.RelayPort, uint32(20000))
+	// 20000 is reserved for the rathole control port; service ports start at 20001.
+	require.GreaterOrEqual(t, resp.RelayPort, uint32(20001))
 	require.LessOrEqual(t, resp.RelayPort, uint32(20099))
 
 	var audits []model.AuditLog
@@ -182,8 +183,11 @@ func TestCreateServiceRejectsBadTarget(t *testing.T) {
 
 func TestCreateServicePortRangeExhausted(t *testing.T) {
 	db := openTestDB(t)
+	// Range 20500-20501: 20500 is reserved for the rathole control port,
+	// leaving exactly one allocatable service port (20501). Second create
+	// must fail with ResourceExhausted.
 	p, _ := dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
-		Slug: "tiny", Name: "T", RelayPortRange: "20500-20500",
+		Slug: "tiny", Name: "T", RelayPortRange: "20500-20501",
 	})
 	_, err := dao.NewSiteDAO(db).Create(context.Background(), &model.Site{ProjectID: p.ID, Name: "b"})
 	require.NoError(t, err)

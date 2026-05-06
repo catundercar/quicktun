@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"gorm.io/gorm"
 
 	"github.com/tulip/quicktun/internal/model"
+	"github.com/tulip/quicktun/internal/resource"
 )
 
 // ErrPortRangeExhausted is returned by AllocateRelayPort when no free port
@@ -103,8 +103,11 @@ func (d *ServiceDAO) Delete(ctx context.Context, id uint64) error {
 
 // AllocateRelayPort returns the lowest unused port in the project's
 // relay_port_range. Returns ErrPortRangeExhausted if all ports are taken.
+//
+// The lowest port in the range is reserved for the rathole control port
+// (see internal/relay/render.go), so service ports start at minP+1.
 func (d *ServiceDAO) AllocateRelayPort(ctx context.Context, project *model.Project) (uint16, error) {
-	minP, maxP, err := parsePortRange(project.RelayPortRange)
+	minP, maxP, err := resource.ParsePortRange(project.RelayPortRange)
 	if err != nil {
 		return 0, fmt.Errorf("dao: allocate relay port: %w", err)
 	}
@@ -124,29 +127,13 @@ func (d *ServiceDAO) AllocateRelayPort(ctx context.Context, project *model.Proje
 		usedSet[p] = struct{}{}
 	}
 
-	for p := minP; p <= maxP; p++ {
-		if _, taken := usedSet[p]; !taken {
-			return p, nil
+	// minP is reserved for the rathole control port; service ports start at minP+1.
+	// Iterate with uint32 so the loop terminates when maxP == 65535
+	// (uint16 would overflow back to 0 forever).
+	for p := uint32(minP) + 1; p <= uint32(maxP); p++ {
+		if _, taken := usedSet[uint16(p)]; !taken {
+			return uint16(p), nil
 		}
 	}
 	return 0, ErrPortRangeExhausted
-}
-
-func parsePortRange(s string) (uint16, uint16, error) {
-	parts := strings.SplitN(s, "-", 2)
-	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("invalid port range %q", s)
-	}
-	minI, err := strconv.ParseUint(strings.TrimSpace(parts[0]), 10, 16)
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid min port: %w", err)
-	}
-	maxI, err := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 16)
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid max port: %w", err)
-	}
-	if minI > maxI {
-		return 0, 0, fmt.Errorf("min %d > max %d", minI, maxI)
-	}
-	return uint16(minI), uint16(maxI), nil
 }
