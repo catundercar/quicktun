@@ -16,11 +16,25 @@ import (
 	"github.com/tulip/quicktun/internal/supervisor"
 )
 
+// ErrManagerClosed is returned by AddProject / Refresh when the Manager has
+// already been stopped.
+var ErrManagerClosed = errors.New("relay: manager closed")
+
 // ManagerConfig configures a Manager.
 type ManagerConfig struct {
 	Binary     string   // path to rathole-server (or fake in tests)
 	BinaryArgs []string // extra args appended after the config path
 	ConfigDir  string   // dir to write per-project config files
+}
+
+// projectSup tracks one running supervisor goroutine. `done` is closed when
+// the goroutine returns; `cancel` requests it to exit. The pair lets Refresh
+// tear an old supervisor down and wait for it to release its bound ports
+// before spawning the replacement.
+type projectSup struct {
+	sup    *supervisor.Supervisor
+	cancel context.CancelFunc
+	done   chan struct{} // closed when the goroutine exits
 }
 
 // Manager owns one *supervisor.Supervisor per active project. Each child is a
@@ -31,26 +45,20 @@ type ManagerConfig struct {
 // written to ConfigDir, but no child processes are spawned. Smoke tests and
 // development builds use this mode.
 //
-// All mutating methods (AddProject, RemoveProject, Refresh, Start, Stop)
-// serialize against `opMu`. This avoids races where two concurrent
-// AddProject calls for the same project would both pass the existence
-// check and double-spawn.
+// Concurrency invariant: `mu` is held for short critical sections that touch
+// `sups`, `rootCtx`, or `closed`. It MUST NOT be held across DB IO, file IO,
+// or goroutine launches — callers release it before doing any of those.
+// Mutating helpers (`addProjectLocked` / `removeProjectLocked`) acquire and
+// release `mu` themselves at the points where they touch state.
 type Manager struct {
 	db  *gorm.DB
 	cfg ManagerConfig
 	lg  *zap.Logger
 
-	// opMu serializes all mutations to the supervisor map. Held across
-	// renderToFile + supervisor.New + goroutine launch so AddProject is
-	// race-free for concurrent callers targeting the same project.
-	opMu sync.Mutex
-
-	// stateMu protects rootCtx + the supervisor maps for cheap reads
-	// (e.g. SupervisorCount). Held briefly inside opMu-guarded operations.
-	stateMu     sync.Mutex
-	rootCtx     context.Context
-	supervisors map[uint64]*supervisor.Supervisor
-	cancels     map[uint64]context.CancelFunc
+	mu      sync.Mutex
+	rootCtx context.Context
+	sups    map[uint64]*projectSup
+	closed  bool
 
 	wg sync.WaitGroup
 }
@@ -64,11 +72,10 @@ func NewManager(db *gorm.DB, cfg ManagerConfig, lg *zap.Logger) *Manager {
 		cfg.ConfigDir = "/tmp/quicktun-relay"
 	}
 	return &Manager{
-		db:          db,
-		cfg:         cfg,
-		lg:          lg,
-		supervisors: map[uint64]*supervisor.Supervisor{},
-		cancels:     map[uint64]context.CancelFunc{},
+		db:   db,
+		cfg:  cfg,
+		lg:   lg,
+		sups: map[uint64]*projectSup{},
 	}
 }
 
@@ -81,9 +88,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("relay: mkdir config dir: %w", err)
 	}
 
-	m.stateMu.Lock()
+	m.mu.Lock()
 	m.rootCtx = ctx
-	m.stateMu.Unlock()
+	m.mu.Unlock()
 
 	var projects []model.Project
 	err := m.db.WithContext(ctx).
@@ -104,23 +111,29 @@ func (m *Manager) Start(ctx context.Context) error {
 
 // AddProject renders the config for projectID and (if Binary is set) starts a
 // new supervisor. Idempotent: if a supervisor already exists, returns nil
-// without re-rendering (use Refresh to re-render).
+// without re-rendering (use Refresh to re-render). Returns ErrManagerClosed
+// if Stop has already been called.
 func (m *Manager) AddProject(ctx context.Context, projectID uint64) error {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
-	return m.addProjectLocked(ctx, projectID)
-}
-
-// addProjectLocked runs the AddProject body. opMu must be held.
-func (m *Manager) addProjectLocked(ctx context.Context, projectID uint64) error {
-	m.stateMu.Lock()
-	if _, ok := m.supervisors[projectID]; ok {
-		m.stateMu.Unlock()
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return ErrManagerClosed
+	}
+	if _, ok := m.sups[projectID]; ok {
+		m.mu.Unlock()
 		return nil
 	}
 	rootCtx := m.rootCtx
-	m.stateMu.Unlock()
+	m.mu.Unlock()
 
+	return m.spawn(ctx, projectID, rootCtx)
+}
+
+// spawn renders the config and (when Binary is set) starts a supervisor
+// goroutine. Caller is responsible for ensuring no other supervisor exists
+// for projectID — typically by holding a higher-level invariant such as the
+// re-check inside the final mu critical section below.
+func (m *Manager) spawn(ctx context.Context, projectID uint64, rootCtx context.Context) error {
 	cfgPath, err := m.renderToFile(ctx, projectID)
 	if err != nil {
 		return err
@@ -147,14 +160,33 @@ func (m *Manager) addProjectLocked(ctx context.Context, projectID uint64) error 
 	}, m.lg)
 
 	childCtx, cancel := context.WithCancel(rootCtx)
-	m.stateMu.Lock()
-	m.supervisors[projectID] = sup
-	m.cancels[projectID] = cancel
-	m.stateMu.Unlock()
+	ps := &projectSup{
+		sup:    sup,
+		cancel: cancel,
+		done:   make(chan struct{}),
+	}
+
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		cancel()
+		close(ps.done)
+		return ErrManagerClosed
+	}
+	if _, ok := m.sups[projectID]; ok {
+		// A concurrent caller raced us. Drop our supervisor and accept theirs.
+		m.mu.Unlock()
+		cancel()
+		close(ps.done)
+		return nil
+	}
+	m.sups[projectID] = ps
+	m.mu.Unlock()
 
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
+		defer close(ps.done)
 		sup.Run(childCtx)
 	}()
 	return nil
@@ -163,20 +195,12 @@ func (m *Manager) addProjectLocked(ctx context.Context, projectID uint64) error 
 // RemoveProject stops the supervisor for projectID and discards it.
 // Best-effort: returns nil even if no such supervisor exists.
 func (m *Manager) RemoveProject(ctx context.Context, projectID uint64) error {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
-	return m.removeProjectLocked(projectID)
-}
-
-// removeProjectLocked runs the RemoveProject body. opMu must be held.
-func (m *Manager) removeProjectLocked(projectID uint64) error {
-	m.stateMu.Lock()
-	cancel, ok := m.cancels[projectID]
-	delete(m.supervisors, projectID)
-	delete(m.cancels, projectID)
-	m.stateMu.Unlock()
+	m.mu.Lock()
+	ps, ok := m.sups[projectID]
+	delete(m.sups, projectID)
+	m.mu.Unlock()
 	if ok {
-		cancel()
+		ps.cancel()
 	}
 	return nil
 }
@@ -187,50 +211,74 @@ func (m *Manager) removeProjectLocked(projectID uint64) error {
 // If projectID has no current supervisor (e.g. a brand-new project), Refresh
 // behaves like AddProject. Returns an error from renderToFile if the project
 // no longer exists in the DB.
+//
+// Refresh waits for the old supervisor's goroutine to fully exit before
+// starting the replacement. This avoids a port-bind race where the new
+// rathole-server tries to bind on the same control + service ports while
+// the old child is still draining stdio + serving SIGTERM (~5s), which
+// would otherwise trip the supervisor backoff and produce a multi-second
+// outage on every Refresh.
 func (m *Manager) Refresh(ctx context.Context, projectID uint64) error {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
-
-	m.stateMu.Lock()
-	_, hasSup := m.supervisors[projectID]
-	m.stateMu.Unlock()
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return ErrManagerClosed
+	}
+	old, hasSup := m.sups[projectID]
+	m.mu.Unlock()
 
 	if !hasSup {
-		return m.addProjectLocked(ctx, projectID)
+		return m.AddProject(ctx, projectID)
 	}
 
-	// Re-render first so we error out (e.g. project deleted) before stopping
-	// the running supervisor. If render succeeds, restart to pick up changes.
+	// Re-render before tearing down so a deleted project (or any other
+	// render error) leaves the existing supervisor running.
 	if _, err := m.renderToFile(ctx, projectID); err != nil {
 		return err
 	}
+
 	if m.cfg.Binary == "" {
 		return nil
 	}
-	if err := m.removeProjectLocked(projectID); err != nil {
-		return err
+
+	// Tear down old supervisor and wait for its goroutine to exit so the
+	// replacement can bind on the same ports without racing the OS.
+	old.cancel()
+	select {
+	case <-old.done:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return m.addProjectLocked(ctx, projectID)
+
+	m.mu.Lock()
+	// Only delete if the slot still points at the supervisor we cancelled —
+	// avoid clobbering anything a concurrent caller may have re-added.
+	if cur, ok := m.sups[projectID]; ok && cur == old {
+		delete(m.sups, projectID)
+	}
+	m.mu.Unlock()
+
+	return m.AddProject(ctx, projectID)
 }
 
 // SupervisorCount reports how many supervisors are currently tracked.
 func (m *Manager) SupervisorCount() int {
-	m.stateMu.Lock()
-	defer m.stateMu.Unlock()
-	return len(m.supervisors)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.sups)
 }
 
-// Stop cancels every supervisor and waits for them to exit.
+// Stop cancels every supervisor and waits for them to exit. After Stop
+// returns, AddProject / Refresh return ErrManagerClosed.
 func (m *Manager) Stop() {
-	m.opMu.Lock()
-	m.stateMu.Lock()
-	for _, c := range m.cancels {
-		c()
+	m.mu.Lock()
+	m.closed = true
+	sups := m.sups
+	m.sups = map[uint64]*projectSup{}
+	m.mu.Unlock()
+	for _, ps := range sups {
+		ps.cancel()
 	}
-	m.cancels = map[uint64]context.CancelFunc{}
-	m.supervisors = map[uint64]*supervisor.Supervisor{}
-	m.stateMu.Unlock()
-	m.opMu.Unlock()
 	m.wg.Wait()
 }
 

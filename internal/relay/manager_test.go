@@ -171,3 +171,50 @@ func TestManagerSkipsWhenBinaryEmpty(t *testing.T) {
 	_, err = os.Stat(filepath.Join(cfgDir, "p1.toml"))
 	require.NoError(t, err)
 }
+
+// TestManagerRefreshWaitsForOldSupervisor pins down the API contract that
+// Refresh tears down the old supervisor and replaces it with exactly one
+// new supervisor. It does not directly exercise a port-bind race (the fake
+// binary releases its ports immediately) but it exercises the done-channel
+// wait path.
+func TestManagerRefreshWaitsForOldSupervisor(t *testing.T) {
+	db := newDB(t)
+	bin := buildFakeBin(t)
+	cfgDir := t.TempDir()
+
+	p, err := dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "p1", Name: "P1", RelayPortRange: "20000-20099",
+	})
+	require.NoError(t, err)
+
+	mgr := relay.NewManager(db, relay.ManagerConfig{
+		Binary: bin, BinaryArgs: []string{"--mode=sleep"}, ConfigDir: cfgDir,
+	}, zap.NewNop())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, mgr.Start(ctx))
+	require.NoError(t, mgr.AddProject(ctx, p.ID))
+	require.Equal(t, 1, mgr.SupervisorCount())
+
+	// Refresh should complete cleanly and leave exactly one tracked supervisor.
+	require.NoError(t, mgr.Refresh(ctx, p.ID))
+	require.Equal(t, 1, mgr.SupervisorCount())
+
+	mgr.Stop()
+}
+
+// TestManagerStopRefusesAddAfterClose verifies the closed-flag guard prevents
+// orphaned supervisors when AddProject is called after Stop.
+func TestManagerStopRefusesAddAfterClose(t *testing.T) {
+	db := newDB(t)
+	cfgDir := t.TempDir()
+	mgr := relay.NewManager(db, relay.ManagerConfig{ConfigDir: cfgDir}, zap.NewNop())
+	require.NoError(t, mgr.Start(context.Background()))
+	mgr.Stop()
+	p, err := dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "p1", Name: "P1", RelayPortRange: "20000-20099",
+	})
+	require.NoError(t, err)
+	err = mgr.AddProject(context.Background(), p.ID)
+	require.Error(t, err)
+}
