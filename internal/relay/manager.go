@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 
@@ -91,6 +92,18 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Lock()
 	m.rootCtx = ctx
 	m.mu.Unlock()
+
+	if m.cfg.Binary != "" {
+		resolved, err := exec.LookPath(m.cfg.Binary)
+		if err != nil {
+			m.lg.Warn("relay: rathole binary not found; supervisors will crash-loop",
+				zap.String("binary", m.cfg.Binary), zap.Error(err))
+			// Don't fail Start — operator may still want the API up. But log loudly.
+		} else {
+			m.lg.Info("relay: rathole binary resolved",
+				zap.String("binary", m.cfg.Binary), zap.String("resolved", resolved))
+		}
+	}
 
 	var projects []model.Project
 	err := m.db.WithContext(ctx).

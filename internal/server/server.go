@@ -40,6 +40,7 @@ type Config struct {
 	HTTPListen       string
 	RelayAddr        string
 	RatholeBinary    string
+	RatholeArgs      []string
 	RatholeConfigDir string
 	SessionTTL       time.Duration
 }
@@ -73,8 +74,9 @@ func New(cfg Config) (*Server, error) {
 	quicktunv1.RegisterAuthServiceServer(gs, authSvc)
 
 	mgr := relay.NewManager(cfg.DB, relay.ManagerConfig{
-		Binary:    cfg.RatholeBinary,
-		ConfigDir: cfg.RatholeConfigDir,
+		Binary:     cfg.RatholeBinary,
+		BinaryArgs: cfg.RatholeArgs,
+		ConfigDir:  cfg.RatholeConfigDir,
 	}, cfg.Logger)
 
 	auditWriter := audit.NewWriter(cfg.DB)

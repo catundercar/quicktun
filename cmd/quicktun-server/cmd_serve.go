@@ -55,6 +55,7 @@ func serveCmd() *cobra.Command {
 				HTTPListen:       cfg.ControlPlane.HTTPListen,
 				RelayAddr:        cfg.ControlPlane.RelayAddr,
 				RatholeBinary:    cfg.Backend.RatholeBinary,
+				RatholeArgs:      cfg.Backend.RatholeArgs,
 				RatholeConfigDir: cfg.Backend.RatholeConfigDir,
 				SessionTTL:       cfg.Session.DefaultTTL,
 			})

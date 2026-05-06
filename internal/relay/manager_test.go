@@ -203,6 +203,17 @@ func TestManagerRefreshWaitsForOldSupervisor(t *testing.T) {
 	mgr.Stop()
 }
 
+func TestManagerStartTolersBadBinary(t *testing.T) {
+	db := newDB(t)
+	cfgDir := t.TempDir()
+	mgr := relay.NewManager(db, relay.ManagerConfig{
+		Binary:    "/nonexistent/quicktun-test-rathole",
+		ConfigDir: cfgDir,
+	}, zap.NewNop())
+	require.NoError(t, mgr.Start(context.Background()))
+	mgr.Stop()
+}
+
 // TestManagerStopRefusesAddAfterClose verifies the closed-flag guard prevents
 // orphaned supervisors when AddProject is called after Stop.
 func TestManagerStopRefusesAddAfterClose(t *testing.T) {

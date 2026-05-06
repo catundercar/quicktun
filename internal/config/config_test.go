@@ -113,5 +113,6 @@ database:
 	cfg, err := config.Load(path)
 	require.NoError(t, err)
 	require.Equal(t, "rathole", cfg.Backend.RatholeBinary)
+	require.Equal(t, []string{"--server"}, cfg.Backend.RatholeArgs)
 	require.Equal(t, "/var/lib/quicktun/relays", cfg.Backend.RatholeConfigDir)
 }
