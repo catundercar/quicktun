@@ -2,6 +2,7 @@ package grpcsvc_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -329,4 +330,46 @@ func TestUpdateServiceRequiresAdmin(t *testing.T) {
 	require.Error(t, err)
 	st, _ := status.FromError(err)
 	require.Equal(t, codes.PermissionDenied, st.Code())
+}
+
+func TestUpdateServiceDisplayNameReflected(t *testing.T) {
+	db := openTestDB(t)
+	mkSvc(t, db, "p1", "bastion", "ssh")
+	svc := newServiceService(t, db)
+
+	resp, err := svc.UpdateService(adminCtx(t, db), &quicktunv1.UpdateServiceRequest{
+		Service: &quicktunv1.Service{
+			Name:        "projects/p1/sites/bastion/services/ssh",
+			DisplayName: "Secure Shell",
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "Secure Shell", resp.DisplayName)
+}
+
+func TestDeleteServiceAuditCapturesRelayPort(t *testing.T) {
+	db := openTestDB(t)
+	_, _, created := mkSvc(t, db, "p1", "bastion", "ssh")
+	// Capture the relay_port assigned to the service before deletion.
+	require.NotNil(t, created.RelayPort)
+	relayPort := *created.RelayPort
+
+	svc := newServiceService(t, db)
+	ctx := adminCtx(t, db)
+
+	_, err := svc.DeleteService(ctx, &quicktunv1.DeleteServiceRequest{
+		Name: "projects/p1/sites/bastion/services/ssh",
+	})
+	require.NoError(t, err)
+
+	// Read the most recent service.delete audit log row.
+	var row model.AuditLog
+	require.NoError(t, db.Where("action = ?", "service.delete").Order("ts DESC").First(&row).Error)
+
+	// Unmarshal ExtraJSON and assert relay_port matches.
+	var extra map[string]any
+	require.NoError(t, json.Unmarshal([]byte(row.ExtraJSON), &extra))
+	// JSON numbers unmarshal as float64.
+	require.Equal(t, float64(relayPort), extra["relay_port"])
 }
