@@ -60,11 +60,19 @@ func (d *SiteDAO) FindByID(ctx context.Context, id uint64) (*model.Site, error) 
 // Empty string fields are skipped so a heartbeat that omits hostname doesn't
 // clobber a previously-set value. last_seen_at is always updated. lan_cidrs
 // is JSON-encoded into the lan_cidrs_json column.
+//
+// lan_cidrs is only written when len(lanCidrs) > 0 — Bootstrap passes nil
+// since BootstrapRequest doesn't carry them; Heartbeat is the channel for
+// CIDR updates.
+//
+// Status is intentionally NOT touched here: the policy decision of whether a
+// heartbeat should flip Status to online belongs in the handler (e.g., do not
+// mark online when the project is disabled). Callers should use SetStatus
+// after a successful UpdateAgentMeta.
 func (d *SiteDAO) UpdateAgentMeta(ctx context.Context, siteID uint64, hostname, osName, agentVersion string, lanCidrs []string) error {
 	now := time.Now().UTC()
 	updates := map[string]any{
 		"last_seen_at": &now,
-		"status":       model.SiteStatusOnline,
 	}
 	if hostname != "" {
 		updates["hostname"] = hostname
@@ -87,6 +95,19 @@ func (d *SiteDAO) UpdateAgentMeta(ctx context.Context, siteID uint64, hostname, 
 		Updates(updates)
 	if res.Error != nil {
 		return fmt.Errorf("dao: update agent meta: %w", res.Error)
+	}
+	return nil
+}
+
+// SetStatus updates only the Site.Status column for siteID. Used by the
+// agent gRPC handler to flip Status to online after a successful Bootstrap or
+// Heartbeat against an active project.
+func (d *SiteDAO) SetStatus(ctx context.Context, siteID uint64, s model.SiteStatus) error {
+	res := d.db.WithContext(ctx).Model(&model.Site{}).
+		Where("id = ?", siteID).
+		Update("status", s)
+	if res.Error != nil {
+		return fmt.Errorf("dao: set site status: %w", res.Error)
 	}
 	return nil
 }

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -36,6 +37,7 @@ type AgentService struct {
 	projects  *dao.ProjectDAO
 	sites     *dao.SiteDAO
 	services  *dao.ServiceDAO
+	lg        *zap.Logger
 	relayHost string // public hostname for rathole control endpoint (no port)
 }
 
@@ -43,16 +45,22 @@ type AgentService struct {
 // reachable hostname an agent will dial to reach this server's per-project
 // rathole-server (e.g., "relay.example.com"). The port is derived per-project
 // from the project's relay_port_range[0] (the rathole control port).
+// If lg is nil a no-op logger is used.
 func NewAgentService(
 	projects *dao.ProjectDAO,
 	sites *dao.SiteDAO,
 	services *dao.ServiceDAO,
+	lg *zap.Logger,
 	relayHost string,
 ) *AgentService {
+	if lg == nil {
+		lg = zap.NewNop()
+	}
 	return &AgentService{
 		projects:  projects,
 		sites:     sites,
 		services:  services,
+		lg:        lg,
 		relayHost: relayHost,
 	}
 }
@@ -68,11 +76,16 @@ func (a *AgentService) Bootstrap(ctx context.Context, req *quicktunv1.BootstrapR
 
 	site, err := a.sites.FindByID(ctx, pr.SiteID)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "site lookup: %v", err)
+		a.lg.Warn("agent: site lookup failed", zap.Uint64("site_id", pr.SiteID), zap.Error(err))
+		return nil, status.Error(codes.Internal, "internal error")
 	}
 	project, err := a.projects.FindByID(ctx, pr.ProjectID)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "project lookup: %v", err)
+		a.lg.Warn("agent: project lookup failed", zap.Uint64("project_id", pr.ProjectID), zap.Error(err))
+		return nil, status.Error(codes.Internal, "internal error")
+	}
+	if project.Status != model.ProjectStatusActive {
+		return nil, status.Error(codes.FailedPrecondition, "project is disabled")
 	}
 
 	minP, _, err := resource.ParsePortRange(project.RelayPortRange)
@@ -82,12 +95,20 @@ func (a *AgentService) Bootstrap(ctx context.Context, req *quicktunv1.BootstrapR
 
 	// Bootstrap doesn't carry lan_cidrs (only Heartbeat does), so pass nil.
 	if err := a.sites.UpdateAgentMeta(ctx, site.ID, req.GetHostname(), req.GetOs(), req.GetAgentVersion(), nil); err != nil {
-		return nil, status.Errorf(codes.Internal, "update meta: %v", err)
+		a.lg.Warn("agent: update meta failed", zap.Uint64("site_id", site.ID), zap.Error(err))
+		return nil, status.Error(codes.Internal, "internal error")
+	}
+	if err := a.sites.SetStatus(ctx, site.ID, model.SiteStatusOnline); err != nil {
+		// non-fatal: a successful Bootstrap is more important than the status flip.
+		a.lg.Warn("agent: failed to set site online", zap.Uint64("site_id", site.ID), zap.Error(err))
 	}
 
+	// TODO(plan9): handle pagination if a site grows beyond 1000 services.
+	// Today this silently caps at 1000.
 	svcs, err := a.services.ListBySite(ctx, site.ID, 1000, "")
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "services: %v", err)
+		a.lg.Warn("agent: list services failed", zap.Uint64("site_id", site.ID), zap.Error(err))
+		return nil, status.Error(codes.Internal, "internal error")
 	}
 
 	tunnels := make([]*quicktunv1.TunnelBinding, 0, len(svcs))
@@ -123,13 +144,30 @@ func (a *AgentService) Heartbeat(ctx context.Context, req *quicktunv1.HeartbeatR
 		return nil, status.Error(codes.Unauthenticated, "no agent principal")
 	}
 
-	if err := a.sites.UpdateAgentMeta(ctx, pr.SiteID, req.GetHostname(), req.GetOs(), req.GetAgentVersion(), req.GetLanCidrs()); err != nil {
-		return nil, status.Errorf(codes.Internal, "update meta: %v", err)
+	project, err := a.projects.FindByID(ctx, pr.ProjectID)
+	if err != nil {
+		a.lg.Warn("agent: project lookup failed", zap.Uint64("project_id", pr.ProjectID), zap.Error(err))
+		return nil, status.Error(codes.Internal, "internal error")
+	}
+	if project.Status != model.ProjectStatusActive {
+		return nil, status.Error(codes.FailedPrecondition, "project is disabled")
 	}
 
+	if err := a.sites.UpdateAgentMeta(ctx, pr.SiteID, req.GetHostname(), req.GetOs(), req.GetAgentVersion(), req.GetLanCidrs()); err != nil {
+		a.lg.Warn("agent: update meta failed", zap.Uint64("site_id", pr.SiteID), zap.Error(err))
+		return nil, status.Error(codes.Internal, "internal error")
+	}
+	if err := a.sites.SetStatus(ctx, pr.SiteID, model.SiteStatusOnline); err != nil {
+		// non-fatal: heartbeat success is more important than the status flip.
+		a.lg.Warn("agent: failed to set site online", zap.Uint64("site_id", pr.SiteID), zap.Error(err))
+	}
+
+	// TODO(plan9): handle pagination if a site grows beyond 1000 services.
+	// Today this silently caps at 1000.
 	svcs, err := a.services.ListBySite(ctx, pr.SiteID, 1000, "")
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "services: %v", err)
+		a.lg.Warn("agent: list services failed", zap.Uint64("site_id", pr.SiteID), zap.Error(err))
+		return nil, status.Error(codes.Internal, "internal error")
 	}
 	current := computeConfigVersion(svcs)
 

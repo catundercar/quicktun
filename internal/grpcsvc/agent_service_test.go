@@ -5,6 +5,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
 	quicktunv1 "github.com/tulip/quicktun/gen/go/quicktun/v1"
@@ -25,6 +28,7 @@ func newAgentService(t *testing.T, db *gorm.DB) *grpcsvc.AgentService {
 		dao.NewProjectDAO(db),
 		dao.NewSiteDAO(db),
 		dao.NewServiceDAO(db),
+		zap.NewNop(),
 		testRelayHost,
 	)
 }
@@ -175,4 +179,51 @@ func TestHeartbeatUpdatesLastSeen(t *testing.T) {
 	require.Equal(t, "0.1.0", post.AgentVersion)
 	require.Contains(t, post.LanCidrsJSON, "10.0.0.0/24")
 	require.Equal(t, model.SiteStatusOnline, post.Status)
+}
+
+// TestBootstrapRejectsDisabledProject verifies that an agent calling
+// Bootstrap against a disabled project receives FailedPrecondition and that
+// the site's status is NOT flipped to online.
+func TestBootstrapRejectsDisabledProject(t *testing.T) {
+	db := openTestDB(t)
+	p, s := mkAgentFixtures(t, db, "proj", "bastion-1")
+	require.NoError(t, db.Model(&model.Project{}).
+		Where("id = ?", p.ID).
+		Update("status", model.ProjectStatusDisabled).Error)
+
+	svc := newAgentService(t, db)
+	_, err := svc.Bootstrap(agentCtx(p, s), &quicktunv1.BootstrapRequest{
+		Hostname: "bastion-host",
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.FailedPrecondition, st.Code())
+
+	// Status must remain pending — no online flip on a disabled project.
+	got, err := dao.NewSiteDAO(db).FindByID(context.Background(), s.ID)
+	require.NoError(t, err)
+	require.Equal(t, model.SiteStatusPending, got.Status)
+}
+
+// TestHeartbeatRejectsDisabledProject verifies a successful Bootstrap followed
+// by a project disable causes Heartbeat to return FailedPrecondition without
+// re-flipping site status to online.
+func TestHeartbeatRejectsDisabledProject(t *testing.T) {
+	db := openTestDB(t)
+	p, s := mkAgentFixtures(t, db, "proj", "bastion-1")
+
+	svc := newAgentService(t, db)
+	// Successful bootstrap first to confirm the happy path puts the site online.
+	_, err := svc.Bootstrap(agentCtx(p, s), &quicktunv1.BootstrapRequest{Hostname: "host"})
+	require.NoError(t, err)
+
+	// Now disable the project and verify Heartbeat is rejected.
+	require.NoError(t, db.Model(&model.Project{}).
+		Where("id = ?", p.ID).
+		Update("status", model.ProjectStatusDisabled).Error)
+
+	_, err = svc.Heartbeat(agentCtx(p, s), &quicktunv1.HeartbeatRequest{})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.FailedPrecondition, st.Code())
 }

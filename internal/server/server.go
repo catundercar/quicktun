@@ -105,14 +105,22 @@ func New(cfg Config) (*Server, error) {
 	)
 	quicktunv1.RegisterServiceServiceServer(gs, serviceSvc)
 
+	// cfg.RelayAddr defaults to a non-empty value via config.setDefaults
+	// ("relay.example.com:443"), so an empty string here is a programming
+	// error rather than a user misconfiguration; fall through to NewAgentService
+	// which will simply emit an empty rathole control hostname (visible in
+	// Bootstrap responses) — operators will notice immediately.
 	relayHost := cfg.RelayAddr
 	if h, _, err := net.SplitHostPort(relayHost); err == nil {
 		relayHost = h
 	}
+	// Else: RelayAddr is just a hostname (no port) — pass through. The agent
+	// will use it directly as the rathole control hostname.
 	agentSvc := grpcsvc.NewAgentService(
 		dao.NewProjectDAO(cfg.DB),
 		dao.NewSiteDAO(cfg.DB),
 		dao.NewServiceDAO(cfg.DB),
+		cfg.Logger,
 		relayHost,
 	)
 	quicktunv1.RegisterAgentServiceServer(gs, agentSvc)
