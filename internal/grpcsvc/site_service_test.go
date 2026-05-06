@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -25,7 +26,20 @@ func newSiteService(t *testing.T, db *gorm.DB) *grpcsvc.SiteService {
 		dao.NewSiteAgentTokenDAO(db),
 		audit.NewWriter(db),
 		"test-relay.example.com:443",
+		zap.NewNop(),
 		nil,
+	)
+}
+
+func newSiteServiceWithRelay(t *testing.T, db *gorm.DB, relay grpcsvc.RelayManager) *grpcsvc.SiteService {
+	return grpcsvc.NewSiteService(
+		dao.NewProjectDAO(db),
+		dao.NewSiteDAO(db),
+		dao.NewSiteAgentTokenDAO(db),
+		audit.NewWriter(db),
+		"test-relay.example.com:443",
+		zap.NewNop(),
+		relay,
 	)
 }
 
@@ -437,6 +451,58 @@ func TestUpdateSiteRejectsUnspecifiedMode(t *testing.T) {
 	require.Error(t, err)
 	st, _ := status.FromError(err)
 	require.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestSiteServiceCallsRelayRefreshOnMutations(t *testing.T) {
+	db := openTestDB(t)
+	_, err := dao.NewProjectDAO(db).Create(context.Background(), &model.Project{
+		Slug: "rp", Name: "RP", RelayPortRange: "20000-20099",
+	})
+	require.NoError(t, err)
+
+	rec := &recordingRelay{}
+	svc := newSiteServiceWithRelay(t, db, rec)
+	ctx := adminCtx(t, db)
+
+	// Create -> Refresh
+	_, err = svc.CreateSite(ctx, &quicktunv1.CreateSiteRequest{
+		Parent: "projects/rp", SiteId: "rs",
+		Site: &quicktunv1.Site{DisplayName: "RS"},
+	})
+	require.NoError(t, err)
+
+	// Update -> Refresh
+	_, err = svc.UpdateSite(ctx, &quicktunv1.UpdateSiteRequest{
+		Site: &quicktunv1.Site{
+			Name: "projects/rp/sites/rs", DisplayName: "RS v2",
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
+	})
+	require.NoError(t, err)
+
+	// Rotate -> Refresh
+	_, err = svc.RotateSiteAgentToken(ctx, &quicktunv1.RotateSiteAgentTokenRequest{
+		Name: "projects/rp/sites/rs",
+	})
+	require.NoError(t, err)
+
+	// Install command -> Refresh
+	_, err = svc.GetSiteInstallCommand(ctx, &quicktunv1.GetSiteInstallCommandRequest{
+		Name: "projects/rp/sites/rs",
+		Os:   "linux",
+	})
+	require.NoError(t, err)
+
+	// Delete -> Refresh
+	_, err = svc.DeleteSite(ctx, &quicktunv1.DeleteSiteRequest{
+		Name: "projects/rp/sites/rs",
+	})
+	require.NoError(t, err)
+
+	require.Len(t, rec.refreshed, 5,
+		"create + update + rotate + install + delete should each call Refresh once")
+	require.Empty(t, rec.added)
+	require.Empty(t, rec.removed)
 }
 
 func TestGetSiteInstallCommandRejectsBadOS(t *testing.T) {

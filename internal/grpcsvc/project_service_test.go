@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -18,8 +19,29 @@ import (
 	"github.com/tulip/quicktun/internal/model"
 )
 
+// recordingRelay is a RelayManager stub that records every method call.
+// Reused across project/site/service tests via the shared grpcsvc_test package.
+type recordingRelay struct {
+	added     []uint64
+	removed   []uint64
+	refreshed []uint64
+}
+
+func (r *recordingRelay) AddProject(_ context.Context, id uint64) error {
+	r.added = append(r.added, id)
+	return nil
+}
+func (r *recordingRelay) RemoveProject(_ context.Context, id uint64) error {
+	r.removed = append(r.removed, id)
+	return nil
+}
+func (r *recordingRelay) Refresh(_ context.Context, id uint64) error {
+	r.refreshed = append(r.refreshed, id)
+	return nil
+}
+
 func newProjectService(t *testing.T, db *gorm.DB) *grpcsvc.ProjectService {
-	return grpcsvc.NewProjectService(dao.NewProjectDAO(db), audit.NewWriter(db), nil)
+	return grpcsvc.NewProjectService(dao.NewProjectDAO(db), audit.NewWriter(db), zap.NewNop(), nil)
 }
 
 // Authenticated context for tests: an admin operator.
@@ -304,6 +326,41 @@ func TestDeleteProjectRefusesIfHasSites(t *testing.T) {
 	require.Error(t, err)
 	st, _ := status.FromError(err)
 	require.Equal(t, codes.FailedPrecondition, st.Code())
+}
+
+func TestProjectServiceCallsRelayManager(t *testing.T) {
+	db := openTestDB(t)
+	rec := &recordingRelay{}
+	svc := grpcsvc.NewProjectService(dao.NewProjectDAO(db), audit.NewWriter(db), zap.NewNop(), rec)
+	ctx := adminCtx(t, db)
+
+	// Create -> AddProject
+	created, err := svc.CreateProject(ctx, &quicktunv1.CreateProjectRequest{
+		ProjectId: "rec-p",
+		Project: &quicktunv1.Project{
+			DisplayName:    "Rec P",
+			RelayPortRange: "20000-20099",
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, rec.added, 1)
+	require.Empty(t, rec.refreshed)
+	require.Empty(t, rec.removed)
+
+	// Update -> Refresh
+	_, err = svc.UpdateProject(ctx, &quicktunv1.UpdateProjectRequest{
+		Project: &quicktunv1.Project{
+			Name: created.Name, DisplayName: "Rec P v2",
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
+	})
+	require.NoError(t, err)
+	require.Len(t, rec.refreshed, 1)
+
+	// Delete -> RemoveProject
+	_, err = svc.DeleteProject(ctx, &quicktunv1.DeleteProjectRequest{Name: created.Name})
+	require.NoError(t, err)
+	require.Len(t, rec.removed, 1)
 }
 
 func TestDeleteProjectForceWithSites(t *testing.T) {

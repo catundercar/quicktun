@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -39,15 +40,20 @@ type ProjectService struct {
 	quicktunv1.UnimplementedProjectServiceServer
 	projects *dao.ProjectDAO
 	audit    *audit.Writer
+	lg       *zap.Logger
 	relay    RelayManager
 }
 
-// NewProjectService constructs a ProjectService.
-func NewProjectService(projects *dao.ProjectDAO, audit *audit.Writer, relay RelayManager) *ProjectService {
+// NewProjectService constructs a ProjectService. If lg is nil a no-op logger
+// is substituted; if relay is nil a no-op manager is substituted.
+func NewProjectService(projects *dao.ProjectDAO, audit *audit.Writer, lg *zap.Logger, relay RelayManager) *ProjectService {
+	if lg == nil {
+		lg = zap.NewNop()
+	}
 	if relay == nil {
 		relay = noopRelayManager{}
 	}
-	return &ProjectService{projects: projects, audit: audit, relay: relay}
+	return &ProjectService{projects: projects, audit: audit, lg: lg, relay: relay}
 }
 
 // GetProject implements quicktunv1.ProjectServiceServer.
@@ -210,8 +216,6 @@ func (s *ProjectService) CreateProject(ctx context.Context, req *quicktunv1.Crea
 		return nil, status.Error(codes.Internal, "create failed")
 	}
 
-	_ = s.relay.AddProject(ctx, row.ID)
-
 	if err := s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(row.ID),
 		Action:    "project.create",
@@ -224,6 +228,13 @@ func (s *ProjectService) CreateProject(ctx context.Context, req *quicktunv1.Crea
 		// Audit failure is non-fatal — log but do not unwind the create.
 		// Production would emit a metric here; Phase 1 swallows.
 		_ = err
+	}
+
+	if err := s.relay.AddProject(ctx, row.ID); err != nil {
+		s.lg.Warn("relay refresh failed",
+			zap.Uint64("project_id", row.ID),
+			zap.String("op", "project.create"),
+			zap.Error(err))
 	}
 
 	return projectToProto(row), nil
@@ -333,14 +344,19 @@ func (s *ProjectService) UpdateProject(ctx context.Context, req *quicktunv1.Upda
 		return nil, status.Error(codes.Internal, "update failed")
 	}
 
-	_ = s.relay.Refresh(ctx, cur.ID)
-
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(cur.ID),
 		Action:    "project.update",
 		Target:    resource.FormatProjectName(cur.Slug),
 		Extra:     changed,
 	})
+
+	if err := s.relay.Refresh(ctx, cur.ID); err != nil {
+		s.lg.Warn("relay refresh failed",
+			zap.Uint64("project_id", cur.ID),
+			zap.String("op", "project.update"),
+			zap.Error(err))
+	}
 
 	return projectToProto(cur), nil
 }
@@ -383,14 +399,19 @@ func (s *ProjectService) DeleteProject(ctx context.Context, req *quicktunv1.Dele
 		return nil, status.Error(codes.Internal, "delete failed")
 	}
 
-	_ = s.relay.RemoveProject(ctx, p.ID)
-
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
 		Action:    "project.delete",
 		Target:    resource.FormatProjectName(p.Slug),
 		Extra:     map[string]any{"force": req.GetForce()},
 	})
+
+	if err := s.relay.RemoveProject(ctx, p.ID); err != nil {
+		s.lg.Warn("relay refresh failed",
+			zap.Uint64("project_id", p.ID),
+			zap.String("op", "project.delete"),
+			zap.Error(err))
+	}
 
 	return &emptypb.Empty{}, nil
 }

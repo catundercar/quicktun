@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -25,7 +26,19 @@ func newServiceService(t *testing.T, db *gorm.DB) *grpcsvc.ServiceService {
 		dao.NewSiteDAO(db),
 		dao.NewServiceDAO(db),
 		audit.NewWriter(db),
+		zap.NewNop(),
 		nil,
+	)
+}
+
+func newServiceServiceWithRelay(t *testing.T, db *gorm.DB, relay grpcsvc.RelayManager) *grpcsvc.ServiceService {
+	return grpcsvc.NewServiceService(
+		dao.NewProjectDAO(db),
+		dao.NewSiteDAO(db),
+		dao.NewServiceDAO(db),
+		audit.NewWriter(db),
+		zap.NewNop(),
+		relay,
 	)
 }
 
@@ -351,6 +364,45 @@ func TestUpdateServiceDisplayNameReflected(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "Secure Shell", resp.DisplayName)
+}
+
+func TestServiceServiceCallsRelayRefreshOnMutations(t *testing.T) {
+	db := openTestDB(t)
+	mkProjAndSite(t, db, "rp", "rs")
+
+	rec := &recordingRelay{}
+	svc := newServiceServiceWithRelay(t, db, rec)
+	ctx := adminCtx(t, db)
+
+	// Create -> Refresh
+	_, err := svc.CreateService(ctx, &quicktunv1.CreateServiceRequest{
+		Parent: "projects/rp/sites/rs", ServiceId: "ssh",
+		Service: &quicktunv1.Service{
+			DisplayName: "SSH", TargetAddr: "127.0.0.1", TargetPort: 22,
+			Proto: quicktunv1.Proto_PROTO_TCP,
+		},
+	})
+	require.NoError(t, err)
+
+	// Update -> Refresh
+	_, err = svc.UpdateService(ctx, &quicktunv1.UpdateServiceRequest{
+		Service: &quicktunv1.Service{
+			Name: "projects/rp/sites/rs/services/ssh", TargetAddr: "10.0.0.1",
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"target_addr"}},
+	})
+	require.NoError(t, err)
+
+	// Delete -> Refresh
+	_, err = svc.DeleteService(ctx, &quicktunv1.DeleteServiceRequest{
+		Name: "projects/rp/sites/rs/services/ssh",
+	})
+	require.NoError(t, err)
+
+	require.Len(t, rec.refreshed, 3,
+		"create + update + delete should each call Refresh once")
+	require.Empty(t, rec.added)
+	require.Empty(t, rec.removed)
 }
 
 func TestDeleteServiceAuditCapturesRelayPort(t *testing.T) {

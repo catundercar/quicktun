@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -25,17 +26,22 @@ type ServiceService struct {
 	sites    *dao.SiteDAO
 	services *dao.ServiceDAO
 	audit    *audit.Writer
+	lg       *zap.Logger
 	relay    RelayManager
 }
 
-// NewServiceService constructs a ServiceService.
-func NewServiceService(projects *dao.ProjectDAO, sites *dao.SiteDAO, services *dao.ServiceDAO, audit *audit.Writer, relay RelayManager) *ServiceService {
+// NewServiceService constructs a ServiceService. If lg is nil a no-op logger
+// is substituted; if relay is nil a no-op manager is substituted.
+func NewServiceService(projects *dao.ProjectDAO, sites *dao.SiteDAO, services *dao.ServiceDAO, audit *audit.Writer, lg *zap.Logger, relay RelayManager) *ServiceService {
+	if lg == nil {
+		lg = zap.NewNop()
+	}
 	if relay == nil {
 		relay = noopRelayManager{}
 	}
 	return &ServiceService{
 		projects: projects, sites: sites, services: services, audit: audit,
-		relay: relay,
+		lg: lg, relay: relay,
 	}
 }
 
@@ -240,8 +246,6 @@ func (s *ServiceService) CreateService(ctx context.Context, req *quicktunv1.Crea
 		return nil, status.Error(codes.Internal, "create failed")
 	}
 
-	_ = s.relay.Refresh(ctx, p.ID)
-
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
 		Action:    "service.create",
@@ -251,6 +255,13 @@ func (s *ServiceService) CreateService(ctx context.Context, req *quicktunv1.Crea
 			"relay_port": relayPort,
 		},
 	})
+
+	if err := s.relay.Refresh(ctx, p.ID); err != nil {
+		s.lg.Warn("relay refresh failed",
+			zap.Uint64("project_id", p.ID),
+			zap.String("op", "service.create"),
+			zap.Error(err))
+	}
 
 	return serviceToProto(p, site, row), nil
 }
@@ -312,14 +323,19 @@ func (s *ServiceService) UpdateService(ctx context.Context, req *quicktunv1.Upda
 		return nil, status.Error(codes.Internal, "update failed")
 	}
 
-	_ = s.relay.Refresh(ctx, p.ID)
-
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
 		Action:    "service.update",
 		Target:    resource.FormatServiceName(p.Slug, site.Name, svc.Name),
 		Extra:     changed,
 	})
+
+	if err := s.relay.Refresh(ctx, p.ID); err != nil {
+		s.lg.Warn("relay refresh failed",
+			zap.Uint64("project_id", p.ID),
+			zap.String("op", "service.update"),
+			zap.Error(err))
+	}
 
 	out := serviceToProto(p, site, svc)
 	if hasDisplayNameOverride {
@@ -341,7 +357,6 @@ func (s *ServiceService) DeleteService(ctx context.Context, req *quicktunv1.Dele
 	if err := s.services.Delete(ctx, svc.ID); err != nil {
 		return nil, status.Error(codes.Internal, "delete failed")
 	}
-	_ = s.relay.Refresh(ctx, p.ID)
 	extra := map[string]any{}
 	if svc.RelayPort != nil {
 		extra["relay_port"] = *svc.RelayPort
@@ -352,5 +367,11 @@ func (s *ServiceService) DeleteService(ctx context.Context, req *quicktunv1.Dele
 		Target:    resource.FormatServiceName(p.Slug, site.Name, svc.Name),
 		Extra:     extra,
 	})
+	if err := s.relay.Refresh(ctx, p.ID); err != nil {
+		s.lg.Warn("relay refresh failed",
+			zap.Uint64("project_id", p.ID),
+			zap.String("op", "service.delete"),
+			zap.Error(err))
+	}
 	return &emptypb.Empty{}, nil
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -26,21 +27,26 @@ type SiteService struct {
 	sites     *dao.SiteDAO
 	tokens    *dao.SiteAgentTokenDAO
 	audit     *audit.Writer
+	lg        *zap.Logger
 	relayAddr string
 	relay     RelayManager
 }
 
-// NewSiteService constructs a SiteService.
-func NewSiteService(projects *dao.ProjectDAO, sites *dao.SiteDAO, tokens *dao.SiteAgentTokenDAO, audit *audit.Writer, relayAddr string, relay RelayManager) *SiteService {
+// NewSiteService constructs a SiteService. If lg is nil a no-op logger is
+// substituted; if relay is nil a no-op manager is substituted.
+func NewSiteService(projects *dao.ProjectDAO, sites *dao.SiteDAO, tokens *dao.SiteAgentTokenDAO, audit *audit.Writer, relayAddr string, lg *zap.Logger, relay RelayManager) *SiteService {
 	if relayAddr == "" {
 		relayAddr = "relay.example.com:443"
+	}
+	if lg == nil {
+		lg = zap.NewNop()
 	}
 	if relay == nil {
 		relay = noopRelayManager{}
 	}
 	return &SiteService{
 		projects: projects, sites: sites, tokens: tokens, audit: audit,
-		relayAddr: relayAddr, relay: relay,
+		lg: lg, relayAddr: relayAddr, relay: relay,
 	}
 }
 
@@ -232,14 +238,19 @@ func (s *SiteService) CreateSite(ctx context.Context, req *quicktunv1.CreateSite
 		return nil, status.Error(codes.Internal, "create failed")
 	}
 
-	_ = s.relay.Refresh(ctx, p.ID)
-
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
 		Action:    "site.create",
 		Target:    resource.FormatSiteName(p.Slug, row.Name),
 		Extra:     map[string]any{"display_name": req.Site.DisplayName},
 	})
+
+	if err := s.relay.Refresh(ctx, p.ID); err != nil {
+		s.lg.Warn("relay refresh failed",
+			zap.Uint64("project_id", p.ID),
+			zap.String("op", "site.create"),
+			zap.Error(err))
+	}
 
 	return siteToProto(p, row), nil
 }
@@ -301,14 +312,19 @@ func (s *SiteService) UpdateSite(ctx context.Context, req *quicktunv1.UpdateSite
 		return nil, status.Error(codes.Internal, "update failed")
 	}
 
-	_ = s.relay.Refresh(ctx, p.ID)
-
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
 		Action:    "site.update",
 		Target:    resource.FormatSiteName(p.Slug, site.Name),
 		Extra:     changed,
 	})
+
+	if err := s.relay.Refresh(ctx, p.ID); err != nil {
+		s.lg.Warn("relay refresh failed",
+			zap.Uint64("project_id", p.ID),
+			zap.String("op", "site.update"),
+			zap.Error(err))
+	}
 
 	out := siteToProto(p, site)
 	if displayNameOverride != "" {
@@ -333,13 +349,18 @@ func (s *SiteService) RotateSiteAgentToken(ctx context.Context, req *quicktunv1.
 		return nil, status.Error(codes.Internal, "issue failed")
 	}
 
-	_ = s.relay.Refresh(ctx, p.ID)
-
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
 		Action:    "site.rotate_agent_token",
 		Target:    resource.FormatSiteName(p.Slug, site.Name),
 	})
+
+	if err := s.relay.Refresh(ctx, p.ID); err != nil {
+		s.lg.Warn("relay refresh failed",
+			zap.Uint64("project_id", p.ID),
+			zap.String("op", "site.rotate_agent_token"),
+			zap.Error(err))
+	}
 
 	resp := &quicktunv1.RotateSiteAgentTokenResponse{Token: raw}
 	if rec.ExpiresAt != nil {
@@ -379,8 +400,6 @@ func (s *SiteService) GetSiteInstallCommand(ctx context.Context, req *quicktunv1
 		return nil, status.Error(codes.Internal, "issue failed")
 	}
 
-	_ = s.relay.Refresh(ctx, p.ID)
-
 	var cmd string
 	switch osKind {
 	case "linux":
@@ -398,6 +417,13 @@ func (s *SiteService) GetSiteInstallCommand(ctx context.Context, req *quicktunv1
 		Target:    resource.FormatSiteName(p.Slug, site.Name),
 		Extra:     map[string]any{"os": osKind},
 	})
+
+	if err := s.relay.Refresh(ctx, p.ID); err != nil {
+		s.lg.Warn("relay refresh failed",
+			zap.Uint64("project_id", p.ID),
+			zap.String("op", "site.install_command"),
+			zap.Error(err))
+	}
 
 	resp := &quicktunv1.GetSiteInstallCommandResponse{
 		Command: cmd,
@@ -432,12 +458,17 @@ func (s *SiteService) DeleteSite(ctx context.Context, req *quicktunv1.DeleteSite
 	if err := s.sites.Delete(ctx, site.ID); err != nil {
 		return nil, status.Error(codes.Internal, "delete failed")
 	}
-	_ = s.relay.Refresh(ctx, p.ID)
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
 		Action:    "site.delete",
 		Target:    resource.FormatSiteName(p.Slug, site.Name),
 		Extra:     map[string]any{"force": req.GetForce()},
 	})
+	if err := s.relay.Refresh(ctx, p.ID); err != nil {
+		s.lg.Warn("relay refresh failed",
+			zap.Uint64("project_id", p.ID),
+			zap.String("op", "site.delete"),
+			zap.Error(err))
+	}
 	return &emptypb.Empty{}, nil
 }
