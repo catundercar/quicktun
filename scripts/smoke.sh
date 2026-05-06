@@ -25,6 +25,9 @@ session:
 log:
   path: ""
   level: info
+backend:
+  rathole_binary: ""
+  rathole_config_dir: ${WORKDIR}/relays
 EOF
 
 make build > /dev/null
@@ -147,9 +150,23 @@ LIST_SVCS=$(curl -sS "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test/sites
   -H "Authorization: Bearer $TOKEN")
 echo "service list: $LIST_SVCS"
 
+echo "service: PASS"
+
+# Verify the rathole config file was rendered to disk by relay.Manager.
+RELAY_CFG="${WORKDIR}/relays/smoke-test.toml"
+if [ ! -f "$RELAY_CFG" ]; then
+  echo "FAIL: rathole config $RELAY_CFG was not rendered" >&2
+  exit 1
+fi
+if ! grep -q 'smoke-bastion__ssh' "$RELAY_CFG"; then
+  echo "FAIL: rathole config does not mention smoke-bastion__ssh" >&2
+  cat "$RELAY_CFG" >&2
+  exit 1
+fi
+echo "relay: PASS"
+
 curl -sS -X DELETE "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test/sites/smoke-bastion/services/ssh" \
   -H "Authorization: Bearer $TOKEN" > /dev/null
-echo "service: PASS"
 
 curl -sS -X DELETE "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test/sites/smoke-bastion" \
   -H "Authorization: Bearer $TOKEN" > /dev/null
@@ -167,4 +184,4 @@ if [ "$GET_CODE" != "404" ]; then
   exit 1
 fi
 
-echo "PASS: end-to-end auth + project + site + service flow"
+echo "PASS: end-to-end auth + project + site + service + relay flow"
