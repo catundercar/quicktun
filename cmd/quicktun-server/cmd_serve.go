@@ -49,12 +49,14 @@ func serveCmd() *cobra.Command {
 			defer func() { sqlDB, _ := db.DB(); sqlDB.Close() }()
 
 			srv, err := server.New(server.Config{
-				DB:         db,
-				Logger:     lg,
-				GRPCListen: cfg.ControlPlane.GRPCListen,
-				HTTPListen: cfg.ControlPlane.HTTPListen,
-				RelayAddr:  cfg.ControlPlane.RelayAddr,
-				SessionTTL: cfg.Session.DefaultTTL,
+				DB:               db,
+				Logger:           lg,
+				GRPCListen:       cfg.ControlPlane.GRPCListen,
+				HTTPListen:       cfg.ControlPlane.HTTPListen,
+				RelayAddr:        cfg.ControlPlane.RelayAddr,
+				RatholeBinary:    cfg.Backend.RatholeBinary,
+				RatholeConfigDir: cfg.Backend.RatholeConfigDir,
+				SessionTTL:       cfg.Session.DefaultTTL,
 			})
 			if err != nil {
 				return err

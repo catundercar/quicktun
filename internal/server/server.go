@@ -29,16 +29,19 @@ import (
 	"github.com/tulip/quicktun/internal/auth"
 	"github.com/tulip/quicktun/internal/dao"
 	"github.com/tulip/quicktun/internal/grpcsvc"
+	"github.com/tulip/quicktun/internal/relay"
 )
 
 // Config bundles construction parameters for Server.
 type Config struct {
-	DB         *gorm.DB
-	Logger     *zap.Logger
-	GRPCListen string
-	HTTPListen string
-	RelayAddr  string
-	SessionTTL time.Duration
+	DB               *gorm.DB
+	Logger           *zap.Logger
+	GRPCListen       string
+	HTTPListen       string
+	RelayAddr        string
+	RatholeBinary    string
+	RatholeConfigDir string
+	SessionTTL       time.Duration
 }
 
 // Server runs the gRPC server and grpc-gateway HTTP server side-by-side.
@@ -46,6 +49,7 @@ type Server struct {
 	cfg        Config
 	grpcServer *grpc.Server
 	httpServer *http.Server
+	relay      *relay.Manager
 }
 
 // New builds a Server but does not yet bind any listeners.
@@ -68,8 +72,13 @@ func New(cfg Config) (*Server, error) {
 	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(sourceIPInterceptor, intc))
 	quicktunv1.RegisterAuthServiceServer(gs, authSvc)
 
+	mgr := relay.NewManager(cfg.DB, relay.ManagerConfig{
+		Binary:    cfg.RatholeBinary,
+		ConfigDir: cfg.RatholeConfigDir,
+	}, cfg.Logger)
+
 	auditWriter := audit.NewWriter(cfg.DB)
-	projectSvc := grpcsvc.NewProjectService(dao.NewProjectDAO(cfg.DB), auditWriter, cfg.Logger, nil)
+	projectSvc := grpcsvc.NewProjectService(dao.NewProjectDAO(cfg.DB), auditWriter, cfg.Logger, mgr)
 	quicktunv1.RegisterProjectServiceServer(gs, projectSvc)
 
 	siteSvc := grpcsvc.NewSiteService(
@@ -79,7 +88,7 @@ func New(cfg Config) (*Server, error) {
 		auditWriter,
 		cfg.RelayAddr,
 		cfg.Logger,
-		nil,
+		mgr,
 	)
 	quicktunv1.RegisterSiteServiceServer(gs, siteSvc)
 
@@ -89,19 +98,24 @@ func New(cfg Config) (*Server, error) {
 		dao.NewServiceDAO(cfg.DB),
 		auditWriter,
 		cfg.Logger,
-		nil,
+		mgr,
 	)
 	quicktunv1.RegisterServiceServiceServer(gs, serviceSvc)
 
-	return &Server{cfg: cfg, grpcServer: gs}, nil
+	return &Server{cfg: cfg, grpcServer: gs, relay: mgr}, nil
 }
 
 // Run binds both listeners and serves until ctx is cancelled or one of the
 // servers errors. On shutdown it stops both servers and returns the first
 // non-nil error.
 func (s *Server) Run(ctx context.Context) error {
+	if err := s.relay.Start(ctx); err != nil {
+		return fmt.Errorf("server: relay manager start: %w", err)
+	}
+
 	grpcLn, err := net.Listen("tcp", s.cfg.GRPCListen)
 	if err != nil {
+		s.relay.Stop()
 		return fmt.Errorf("server: listen grpc %q: %w", s.cfg.GRPCListen, err)
 	}
 
@@ -109,18 +123,22 @@ func (s *Server) Run(ctx context.Context) error {
 	dialOpts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	if err := quicktunv1.RegisterAuthServiceHandlerFromEndpoint(ctx, gatewayMux, s.cfg.GRPCListen, dialOpts); err != nil {
 		grpcLn.Close()
+		s.relay.Stop()
 		return fmt.Errorf("server: register gateway: %w", err)
 	}
 	if err := quicktunv1.RegisterProjectServiceHandlerFromEndpoint(ctx, gatewayMux, s.cfg.GRPCListen, dialOpts); err != nil {
 		grpcLn.Close()
+		s.relay.Stop()
 		return fmt.Errorf("server: register project gateway: %w", err)
 	}
 	if err := quicktunv1.RegisterSiteServiceHandlerFromEndpoint(ctx, gatewayMux, s.cfg.GRPCListen, dialOpts); err != nil {
 		grpcLn.Close()
+		s.relay.Stop()
 		return fmt.Errorf("server: register site gateway: %w", err)
 	}
 	if err := quicktunv1.RegisterServiceServiceHandlerFromEndpoint(ctx, gatewayMux, s.cfg.GRPCListen, dialOpts); err != nil {
 		grpcLn.Close()
+		s.relay.Stop()
 		return fmt.Errorf("server: register service gateway: %w", err)
 	}
 
@@ -161,6 +179,7 @@ func (s *Server) Run(ctx context.Context) error {
 		firstErr = err
 	}
 	s.grpcServer.GracefulStop()
+	s.relay.Stop()
 
 	// Drain remaining channel to avoid goroutine leak.
 	go func() { <-errCh }()

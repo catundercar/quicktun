@@ -28,6 +28,13 @@ type Config struct {
 	Database     DatabaseConfig     `mapstructure:"database"`
 	Session      SessionConfig      `mapstructure:"session"`
 	Log          LogConfig          `mapstructure:"log"`
+	Backend      BackendConfig      `mapstructure:"backend"`
+}
+
+// BackendConfig configures the relay backend (Phase 1: rathole).
+type BackendConfig struct {
+	RatholeBinary    string `mapstructure:"rathole_binary"`
+	RatholeConfigDir string `mapstructure:"rathole_config_dir"`
 }
 
 // ControlPlaneConfig holds gRPC + grpc-gateway listener settings.
@@ -113,4 +120,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("log.max_size_mb", 100)
 	v.SetDefault("log.max_age_days", 30)
 	v.SetDefault("log.max_backups", 7)
+	v.SetDefault("backend.rathole_binary", "rathole")
+	v.SetDefault("backend.rathole_config_dir", "/var/lib/quicktun/relays")
 }

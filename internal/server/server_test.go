@@ -53,7 +53,8 @@ func TestServerLoginEndToEnd(t *testing.T) {
 	srv, err := server.New(server.Config{
 		DB: db, Logger: zap.NewNop(),
 		GRPCListen: grpcAddr, HTTPListen: httpAddr,
-		SessionTTL: time.Hour,
+		RatholeConfigDir: t.TempDir(),
+		SessionTTL:       time.Hour,
 	})
 	require.NoError(t, err)
 
@@ -107,7 +108,8 @@ func TestServerWhoAmIRequiresAuth(t *testing.T) {
 	srv, err := server.New(server.Config{
 		DB: db, Logger: zap.NewNop(),
 		GRPCListen: grpcAddr, HTTPListen: httpAddr,
-		SessionTTL: time.Hour,
+		RatholeConfigDir: t.TempDir(),
+		SessionTTL:       time.Hour,
 	})
 	require.NoError(t, err)
 
@@ -157,7 +159,8 @@ func TestProjectCreateAndListEndToEnd(t *testing.T) {
 	srv, err := server.New(server.Config{
 		DB: db, Logger: zap.NewNop(),
 		GRPCListen: grpcAddr, HTTPListen: httpAddr,
-		SessionTTL: time.Hour,
+		RatholeConfigDir: t.TempDir(),
+		SessionTTL:       time.Hour,
 	})
 	require.NoError(t, err)
 
@@ -226,7 +229,8 @@ func TestSiteCreateEndToEnd(t *testing.T) {
 	srv, err := server.New(server.Config{
 		DB: db, Logger: zap.NewNop(),
 		GRPCListen: grpcAddr, HTTPListen: httpAddr,
-		SessionTTL: time.Hour,
+		RatholeConfigDir: t.TempDir(),
+		SessionTTL:       time.Hour,
 	})
 	require.NoError(t, err)
 
@@ -293,7 +297,8 @@ func TestServiceCreateEndToEnd(t *testing.T) {
 	srv, err := server.New(server.Config{
 		DB: db, Logger: zap.NewNop(),
 		GRPCListen: grpcAddr, HTTPListen: httpAddr,
-		SessionTTL: time.Hour,
+		RatholeConfigDir: t.TempDir(),
+		SessionTTL:       time.Hour,
 	})
 	require.NoError(t, err)
 

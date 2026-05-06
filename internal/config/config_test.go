@@ -102,3 +102,16 @@ database:
 	require.NoError(t, err)
 	require.Equal(t, "relay.example.com:443", cfg.ControlPlane.RelayAddr)
 }
+
+func TestBackendDefaults(t *testing.T) {
+	yaml := `
+database:
+  dsn: ":memory:"
+`
+	path := filepath.Join(t.TempDir(), "server.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o600))
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "rathole", cfg.Backend.RatholeBinary)
+	require.Equal(t, "/var/lib/quicktun/relays", cfg.Backend.RatholeConfigDir)
+}
