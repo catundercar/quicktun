@@ -3,6 +3,7 @@ package grpcsvc
 import (
 	"context"
 	"errors"
+	"strconv"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -237,26 +238,12 @@ func (s *ServiceService) CreateService(ctx context.Context, req *quicktunv1.Crea
 		Action:    "service.create",
 		Target:    resource.FormatServiceName(p.Slug, site.Name, row.Name),
 		Extra: map[string]any{
-			"target":     row.TargetAddr + ":" + intToString(int(row.TargetPort)),
+			"target":     row.TargetAddr + ":" + strconv.Itoa(int(row.TargetPort)),
 			"relay_port": relayPort,
 		},
 	})
 
 	return serviceToProto(p, site, row), nil
-}
-
-func intToString(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b [10]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(b[i:])
 }
 
 // UpdateService implements quicktunv1.ServiceServiceServer.
@@ -277,10 +264,14 @@ func (s *ServiceService) UpdateService(ctx context.Context, req *quicktunv1.Upda
 	}
 
 	changed := map[string]any{}
+	var displayNameOverride string
+	hasDisplayNameOverride := false
 	for _, path := range req.UpdateMask.Paths {
 		switch path {
 		case "display_name":
 			// Phase 1: Service.Name doubles as slug+label. Audit captures the request.
+			displayNameOverride = req.Service.DisplayName
+			hasDisplayNameOverride = true
 			changed["display_name"] = req.Service.DisplayName
 		case "target_addr":
 			if req.Service.TargetAddr == "" {
@@ -319,7 +310,11 @@ func (s *ServiceService) UpdateService(ctx context.Context, req *quicktunv1.Upda
 		Extra:     changed,
 	})
 
-	return serviceToProto(p, site, svc), nil
+	out := serviceToProto(p, site, svc)
+	if hasDisplayNameOverride {
+		out.DisplayName = displayNameOverride
+	}
+	return out, nil
 }
 
 // DeleteService implements quicktunv1.ServiceServiceServer.
@@ -335,10 +330,15 @@ func (s *ServiceService) DeleteService(ctx context.Context, req *quicktunv1.Dele
 	if err := s.services.Delete(ctx, svc.ID); err != nil {
 		return nil, status.Error(codes.Internal, "delete failed")
 	}
+	extra := map[string]any{}
+	if svc.RelayPort != nil {
+		extra["relay_port"] = *svc.RelayPort
+	}
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
 		Action:    "service.delete",
 		Target:    resource.FormatServiceName(p.Slug, site.Name, svc.Name),
+		Extra:     extra,
 	})
 	return &emptypb.Empty{}, nil
 }

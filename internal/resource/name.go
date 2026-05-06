@@ -2,7 +2,7 @@
 //
 // Resource names look like "projects/{project}", "operators/{operator}", etc.
 // Slugs are URL-safe lowercase strings: [a-z0-9][a-z0-9-]*[a-z0-9], length
-// 3-64. Tokens like "Project" or paths with extra segments are rejected.
+// 1-64. Tokens like "Project" or paths with extra segments are rejected.
 package resource
 
 import (
@@ -20,7 +20,7 @@ const (
 
 // ValidateSlug returns an error if s is not a valid resource ID slug.
 //
-// Valid: 3-64 chars, [a-z0-9][a-z0-9-]*[a-z0-9], no consecutive dashes.
+// Valid: 1-64 chars, [a-z0-9][a-z0-9-]*[a-z0-9], no consecutive dashes.
 func ValidateSlug(s string) error {
 	if len(s) < minSlugLen || len(s) > maxSlugLen {
 		return fmt.Errorf("resource: slug %q must be %d-%d chars", s, minSlugLen, maxSlugLen)

@@ -309,3 +309,24 @@ func TestDeleteServiceRequiresAdmin(t *testing.T) {
 	st, _ := status.FromError(err)
 	require.Equal(t, codes.PermissionDenied, st.Code())
 }
+
+func TestUpdateServiceRequiresAdmin(t *testing.T) {
+	db := openTestDB(t)
+	p, _, _ := mkSvc(t, db, "p1", "bastion", "ssh")
+	op := seedOperator(t, db, "u@x.com", "p", false)
+	require.NoError(t, db.Create(&model.OperatorProjectAccess{
+		OperatorID: op.ID, ProjectID: p.ID, Role: model.ProjectRoleViewer,
+	}).Error)
+	svc := newServiceService(t, db)
+
+	ctx := auth.WithOperator(context.Background(), op)
+	_, err := svc.UpdateService(ctx, &quicktunv1.UpdateServiceRequest{
+		Service: &quicktunv1.Service{
+			Name: "projects/p1/sites/bastion/services/ssh", TargetAddr: "x",
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"target_addr"}},
+	})
+	require.Error(t, err)
+	st, _ := status.FromError(err)
+	require.Equal(t, codes.PermissionDenied, st.Code())
+}
