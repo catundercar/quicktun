@@ -1,0 +1,70 @@
+// AgentService — control-plane API called by site agents on bastion hosts.
+syntax = "proto3";
+
+package quicktun.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/tulip/quicktun/gen/go/quicktun/v1;quicktunv1";
+
+service AgentService {
+  // Bootstrap returns the agent's full operating state: rathole control
+  // endpoint, per-service tunnel bindings, and a recommended heartbeat
+  // interval. The agent calls this on start and again whenever Heartbeat
+  // returns should_rebootstrap=true.
+  rpc Bootstrap(BootstrapRequest) returns (BootstrapResponse) {
+    option (google.api.http) = {
+      post: "/v1/agent:bootstrap"
+      body: "*"
+    };
+  }
+
+  // Heartbeat reports liveness + host metadata. Server updates the
+  // corresponding Site row's last_seen_time / hostname / os /
+  // agent_version. Returns should_rebootstrap=true when bindings have
+  // changed since the agent's last Bootstrap.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse) {
+    option (google.api.http) = {
+      post: "/v1/agent:heartbeat"
+      body: "*"
+    };
+  }
+}
+
+message BootstrapRequest {
+  string hostname = 1;
+  string os = 2;
+  string agent_version = 3;
+}
+
+message BootstrapResponse {
+  string site_name = 1;
+  string project_slug = 2;
+  string site_slug = 3;
+  string rathole_control_addr = 4;
+  repeated TunnelBinding tunnels = 5;
+  int32 heartbeat_seconds = 6;
+  string config_version = 7;
+}
+
+message TunnelBinding {
+  string service_slug = 1;
+  string target_addr = 2;
+  uint32 target_port = 3;
+  string proto = 4;
+  uint32 relay_port = 5;
+}
+
+message HeartbeatRequest {
+  string hostname = 1;
+  string os = 2;
+  string agent_version = 3;
+  repeated string lan_cidrs = 4;
+  string config_version = 5;
+}
+
+message HeartbeatResponse {
+  bool should_rebootstrap = 1;
+  google.protobuf.Timestamp server_time = 2;
+}
