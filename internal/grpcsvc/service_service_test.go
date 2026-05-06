@@ -25,6 +25,7 @@ func newServiceService(t *testing.T, db *gorm.DB) *grpcsvc.ServiceService {
 		dao.NewSiteDAO(db),
 		dao.NewServiceDAO(db),
 		audit.NewWriter(db),
+		nil,
 	)
 }
 

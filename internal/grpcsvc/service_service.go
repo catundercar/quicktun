@@ -25,11 +25,18 @@ type ServiceService struct {
 	sites    *dao.SiteDAO
 	services *dao.ServiceDAO
 	audit    *audit.Writer
+	relay    RelayManager
 }
 
 // NewServiceService constructs a ServiceService.
-func NewServiceService(projects *dao.ProjectDAO, sites *dao.SiteDAO, services *dao.ServiceDAO, audit *audit.Writer) *ServiceService {
-	return &ServiceService{projects: projects, sites: sites, services: services, audit: audit}
+func NewServiceService(projects *dao.ProjectDAO, sites *dao.SiteDAO, services *dao.ServiceDAO, audit *audit.Writer, relay RelayManager) *ServiceService {
+	if relay == nil {
+		relay = noopRelayManager{}
+	}
+	return &ServiceService{
+		projects: projects, sites: sites, services: services, audit: audit,
+		relay: relay,
+	}
 }
 
 // resolveSiteFromParent parses a "projects/{p}/sites/{s}" parent and returns
@@ -233,6 +240,8 @@ func (s *ServiceService) CreateService(ctx context.Context, req *quicktunv1.Crea
 		return nil, status.Error(codes.Internal, "create failed")
 	}
 
+	_ = s.relay.Refresh(ctx, p.ID)
+
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
 		Action:    "service.create",
@@ -303,6 +312,8 @@ func (s *ServiceService) UpdateService(ctx context.Context, req *quicktunv1.Upda
 		return nil, status.Error(codes.Internal, "update failed")
 	}
 
+	_ = s.relay.Refresh(ctx, p.ID)
+
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
 		Action:    "service.update",
@@ -330,6 +341,7 @@ func (s *ServiceService) DeleteService(ctx context.Context, req *quicktunv1.Dele
 	if err := s.services.Delete(ctx, svc.ID); err != nil {
 		return nil, status.Error(codes.Internal, "delete failed")
 	}
+	_ = s.relay.Refresh(ctx, p.ID)
 	extra := map[string]any{}
 	if svc.RelayPort != nil {
 		extra["relay_port"] = *svc.RelayPort

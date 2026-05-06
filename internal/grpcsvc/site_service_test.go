@@ -25,6 +25,7 @@ func newSiteService(t *testing.T, db *gorm.DB) *grpcsvc.SiteService {
 		dao.NewSiteAgentTokenDAO(db),
 		audit.NewWriter(db),
 		"test-relay.example.com:443",
+		nil,
 	)
 }
 

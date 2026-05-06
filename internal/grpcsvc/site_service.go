@@ -27,16 +27,20 @@ type SiteService struct {
 	tokens    *dao.SiteAgentTokenDAO
 	audit     *audit.Writer
 	relayAddr string
+	relay     RelayManager
 }
 
 // NewSiteService constructs a SiteService.
-func NewSiteService(projects *dao.ProjectDAO, sites *dao.SiteDAO, tokens *dao.SiteAgentTokenDAO, audit *audit.Writer, relayAddr string) *SiteService {
+func NewSiteService(projects *dao.ProjectDAO, sites *dao.SiteDAO, tokens *dao.SiteAgentTokenDAO, audit *audit.Writer, relayAddr string, relay RelayManager) *SiteService {
 	if relayAddr == "" {
 		relayAddr = "relay.example.com:443"
 	}
+	if relay == nil {
+		relay = noopRelayManager{}
+	}
 	return &SiteService{
 		projects: projects, sites: sites, tokens: tokens, audit: audit,
-		relayAddr: relayAddr,
+		relayAddr: relayAddr, relay: relay,
 	}
 }
 
@@ -228,6 +232,8 @@ func (s *SiteService) CreateSite(ctx context.Context, req *quicktunv1.CreateSite
 		return nil, status.Error(codes.Internal, "create failed")
 	}
 
+	_ = s.relay.Refresh(ctx, p.ID)
+
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
 		Action:    "site.create",
@@ -295,6 +301,8 @@ func (s *SiteService) UpdateSite(ctx context.Context, req *quicktunv1.UpdateSite
 		return nil, status.Error(codes.Internal, "update failed")
 	}
 
+	_ = s.relay.Refresh(ctx, p.ID)
+
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
 		Action:    "site.update",
@@ -324,6 +332,8 @@ func (s *SiteService) RotateSiteAgentToken(ctx context.Context, req *quicktunv1.
 	if err != nil {
 		return nil, status.Error(codes.Internal, "issue failed")
 	}
+
+	_ = s.relay.Refresh(ctx, p.ID)
 
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
@@ -368,6 +378,8 @@ func (s *SiteService) GetSiteInstallCommand(ctx context.Context, req *quicktunv1
 	if err != nil {
 		return nil, status.Error(codes.Internal, "issue failed")
 	}
+
+	_ = s.relay.Refresh(ctx, p.ID)
 
 	var cmd string
 	switch osKind {
@@ -420,6 +432,7 @@ func (s *SiteService) DeleteSite(ctx context.Context, req *quicktunv1.DeleteSite
 	if err := s.sites.Delete(ctx, site.ID); err != nil {
 		return nil, status.Error(codes.Internal, "delete failed")
 	}
+	_ = s.relay.Refresh(ctx, p.ID)
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
 		Action:    "site.delete",

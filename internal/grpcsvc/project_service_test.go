@@ -19,7 +19,7 @@ import (
 )
 
 func newProjectService(t *testing.T, db *gorm.DB) *grpcsvc.ProjectService {
-	return grpcsvc.NewProjectService(dao.NewProjectDAO(db), audit.NewWriter(db))
+	return grpcsvc.NewProjectService(dao.NewProjectDAO(db), audit.NewWriter(db), nil)
 }
 
 // Authenticated context for tests: an admin operator.

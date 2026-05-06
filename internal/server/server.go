@@ -69,7 +69,7 @@ func New(cfg Config) (*Server, error) {
 	quicktunv1.RegisterAuthServiceServer(gs, authSvc)
 
 	auditWriter := audit.NewWriter(cfg.DB)
-	projectSvc := grpcsvc.NewProjectService(dao.NewProjectDAO(cfg.DB), auditWriter)
+	projectSvc := grpcsvc.NewProjectService(dao.NewProjectDAO(cfg.DB), auditWriter, nil)
 	quicktunv1.RegisterProjectServiceServer(gs, projectSvc)
 
 	siteSvc := grpcsvc.NewSiteService(
@@ -78,6 +78,7 @@ func New(cfg Config) (*Server, error) {
 		dao.NewSiteAgentTokenDAO(cfg.DB),
 		auditWriter,
 		cfg.RelayAddr,
+		nil,
 	)
 	quicktunv1.RegisterSiteServiceServer(gs, siteSvc)
 
@@ -86,6 +87,7 @@ func New(cfg Config) (*Server, error) {
 		dao.NewSiteDAO(cfg.DB),
 		dao.NewServiceDAO(cfg.DB),
 		auditWriter,
+		nil,
 	)
 	quicktunv1.RegisterServiceServiceServer(gs, serviceSvc)
 

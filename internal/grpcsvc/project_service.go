@@ -18,16 +18,36 @@ import (
 	"github.com/tulip/quicktun/internal/resource"
 )
 
+// RelayManager is the subset of relay.Manager that gRPC services depend on.
+// Defined here so tests can supply a stub without importing the relay package.
+type RelayManager interface {
+	AddProject(ctx context.Context, projectID uint64) error
+	RemoveProject(ctx context.Context, projectID uint64) error
+	Refresh(ctx context.Context, projectID uint64) error
+}
+
+// noopRelayManager satisfies RelayManager but does nothing. Used by services
+// constructed without an explicit manager (typically tests).
+type noopRelayManager struct{}
+
+func (noopRelayManager) AddProject(context.Context, uint64) error    { return nil }
+func (noopRelayManager) RemoveProject(context.Context, uint64) error { return nil }
+func (noopRelayManager) Refresh(context.Context, uint64) error       { return nil }
+
 // ProjectService implements quicktunv1.ProjectServiceServer.
 type ProjectService struct {
 	quicktunv1.UnimplementedProjectServiceServer
 	projects *dao.ProjectDAO
 	audit    *audit.Writer
+	relay    RelayManager
 }
 
 // NewProjectService constructs a ProjectService.
-func NewProjectService(projects *dao.ProjectDAO, audit *audit.Writer) *ProjectService {
-	return &ProjectService{projects: projects, audit: audit}
+func NewProjectService(projects *dao.ProjectDAO, audit *audit.Writer, relay RelayManager) *ProjectService {
+	if relay == nil {
+		relay = noopRelayManager{}
+	}
+	return &ProjectService{projects: projects, audit: audit, relay: relay}
 }
 
 // GetProject implements quicktunv1.ProjectServiceServer.
@@ -190,6 +210,8 @@ func (s *ProjectService) CreateProject(ctx context.Context, req *quicktunv1.Crea
 		return nil, status.Error(codes.Internal, "create failed")
 	}
 
+	_ = s.relay.AddProject(ctx, row.ID)
+
 	if err := s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(row.ID),
 		Action:    "project.create",
@@ -311,6 +333,8 @@ func (s *ProjectService) UpdateProject(ctx context.Context, req *quicktunv1.Upda
 		return nil, status.Error(codes.Internal, "update failed")
 	}
 
+	_ = s.relay.Refresh(ctx, cur.ID)
+
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(cur.ID),
 		Action:    "project.update",
@@ -358,6 +382,8 @@ func (s *ProjectService) DeleteProject(ctx context.Context, req *quicktunv1.Dele
 	if err := s.projects.Delete(ctx, p.ID); err != nil {
 		return nil, status.Error(codes.Internal, "delete failed")
 	}
+
+	_ = s.relay.RemoveProject(ctx, p.ID)
 
 	_ = s.audit.Log(ctx, audit.Entry{
 		ProjectID: ptrUint64(p.ID),
