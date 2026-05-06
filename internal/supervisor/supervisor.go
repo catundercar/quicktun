@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -20,7 +21,8 @@ type Spec struct {
 	Name   string // logical name for logs
 	Binary string // absolute path
 	Args   []string
-	Env    []string
+	// Env is appended to the parent's environment. nil/empty means inherit only.
+	Env []string
 
 	// OnLog receives each line of stdout/stderr.
 	OnLog func(line, source string)
@@ -33,9 +35,8 @@ type Supervisor struct {
 	spec Spec
 	lg   *zap.Logger
 
-	mu     sync.Mutex
-	cmd    *exec.Cmd
-	stopCh chan struct{}
+	mu  sync.Mutex
+	cmd *exec.Cmd
 }
 
 // New constructs a Supervisor.
@@ -43,7 +44,7 @@ func New(spec Spec, lg *zap.Logger) *Supervisor {
 	if lg == nil {
 		lg = zap.NewNop()
 	}
-	return &Supervisor{spec: spec, lg: lg, stopCh: make(chan struct{})}
+	return &Supervisor{spec: spec, lg: lg}
 }
 
 // Pid returns the running child's PID, or 0 if not running.
@@ -70,12 +71,16 @@ func (s *Supervisor) Run(ctx context.Context) {
 		default:
 		}
 
+		start := time.Now()
 		err := s.runOnce(ctx)
 		if s.spec.OnExit != nil {
 			s.spec.OnExit(err)
 		}
 		if ctx.Err() != nil {
 			return
+		}
+		if time.Since(start) > 60*time.Second {
+			backoff = time.Second
 		}
 
 		s.lg.Warn("supervisor: child exited",
@@ -95,25 +100,12 @@ func (s *Supervisor) Run(ctx context.Context) {
 	}
 }
 
-// Stop is a convenience for callers that don't pass a ctx.WithCancel.
-// It closes a sentinel; Run will exit on the next iteration after seeing it.
-// Most callers should use ctx.WithCancel and pass the cancel-able ctx to Run.
-func (s *Supervisor) Stop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	select {
-	case <-s.stopCh:
-	default:
-		close(s.stopCh)
-	}
-	if s.cmd != nil && s.cmd.Process != nil {
-		_ = s.cmd.Process.Signal(termSignal)
-	}
-}
-
 func (s *Supervisor) runOnce(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, s.spec.Binary, s.spec.Args...)
-	cmd.Env = s.spec.Env
+	if len(s.spec.Env) > 0 {
+		cmd.Env = append(os.Environ(), s.spec.Env...)
+	}
+	// else: leave nil so child inherits parent env
 	cmd.SysProcAttr = platformSysProcAttr()
 
 	stdout, err := cmd.StdoutPipe()
@@ -152,6 +144,7 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 
 func (s *Supervisor) pipe(r io.Reader, src string) {
 	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
 		line := sc.Text()
 		if s.spec.OnLog != nil {

@@ -2,9 +2,12 @@
 
 package supervisor
 
-import "syscall"
+import (
+	"os"
+	"syscall"
+)
 
-var termSignal = syscall.SIGTERM
+var termSignal os.Signal = syscall.SIGTERM
 
 func platformSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{
