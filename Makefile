@@ -3,14 +3,19 @@
 GO ?= go
 BINDIR := bin
 SERVER_BIN := $(BINDIR)/quicktun-server
+AGENT_BIN  := $(BINDIR)/quicktun-agent
 
 all: build
 
-build: $(SERVER_BIN)
+build: $(SERVER_BIN) $(AGENT_BIN)
 
 $(SERVER_BIN): sync-migrations
 	@mkdir -p $(BINDIR)
 	$(GO) build -o $@ ./cmd/quicktun-server
+
+$(AGENT_BIN):
+	@mkdir -p $(BINDIR)
+	$(GO) build -o $@ ./cmd/quicktun-agent
 
 test:
 	$(GO) test ./...
