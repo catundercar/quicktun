@@ -30,6 +30,12 @@ func AgentFromContext(ctx context.Context) (*AgentPrincipal, bool) {
 	return a, ok
 }
 
+// WithAgentPrincipal attaches an AgentPrincipal to ctx. For tests; the
+// production path uses AgentInterceptor.
+func WithAgentPrincipal(ctx context.Context, p *AgentPrincipal) context.Context {
+	return context.WithValue(ctx, agentCtxKey{}, p)
+}
+
 // AgentInterceptor authenticates AgentService RPCs via Bearer site agent
 // tokens. Methods outside /quicktun.v1.AgentService/* pass through (the
 // operator interceptor handles those).

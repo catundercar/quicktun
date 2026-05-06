@@ -67,6 +67,12 @@ func NewUnaryInterceptor(v Validator, unauth ...string) grpc.UnaryServerIntercep
 		if _, ok := allowlist[info.FullMethod]; ok {
 			return handler(ctx, req)
 		}
+		// AgentService is authenticated by AgentInterceptor (site agent
+		// tokens, not operator sessions). Pass through so that interceptor
+		// can do its own check.
+		if strings.HasPrefix(info.FullMethod, "/quicktun.v1.AgentService/") {
+			return handler(ctx, req)
+		}
 		token := extractBearer(ctx)
 		if token == "" {
 			return nil, status.Error(codes.Unauthenticated, "missing bearer token")

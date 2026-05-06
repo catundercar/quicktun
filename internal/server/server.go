@@ -70,7 +70,8 @@ func New(cfg Config) (*Server, error) {
 	authSvc := grpcsvc.NewAuthService(ops, sessions, cfg.SessionTTL)
 
 	intc := auth.NewUnaryInterceptor(sessions, "/quicktun.v1.AuthService/Login")
-	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(sourceIPInterceptor, intc))
+	agentIntc := auth.AgentInterceptor(cfg.DB, cfg.Logger)
+	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(sourceIPInterceptor, intc, agentIntc))
 	quicktunv1.RegisterAuthServiceServer(gs, authSvc)
 
 	mgr := relay.NewManager(cfg.DB, relay.ManagerConfig{
@@ -103,6 +104,18 @@ func New(cfg Config) (*Server, error) {
 		mgr,
 	)
 	quicktunv1.RegisterServiceServiceServer(gs, serviceSvc)
+
+	relayHost := cfg.RelayAddr
+	if h, _, err := net.SplitHostPort(relayHost); err == nil {
+		relayHost = h
+	}
+	agentSvc := grpcsvc.NewAgentService(
+		dao.NewProjectDAO(cfg.DB),
+		dao.NewSiteDAO(cfg.DB),
+		dao.NewServiceDAO(cfg.DB),
+		relayHost,
+	)
+	quicktunv1.RegisterAgentServiceServer(gs, agentSvc)
 
 	return &Server{cfg: cfg, grpcServer: gs, relay: mgr}, nil
 }

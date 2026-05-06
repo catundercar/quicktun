@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -44,6 +45,50 @@ func (d *SiteDAO) FindByName(ctx context.Context, projectID uint64, name string)
 		return nil, fmt.Errorf("dao: find site by name: %w", err)
 	}
 	return &s, nil
+}
+
+// FindByID returns the live site at id.
+func (d *SiteDAO) FindByID(ctx context.Context, id uint64) (*model.Site, error) {
+	var s model.Site
+	if err := d.db.WithContext(ctx).First(&s, id).Error; err != nil {
+		return nil, fmt.Errorf("dao: find site by id: %w", err)
+	}
+	return &s, nil
+}
+
+// UpdateAgentMeta refreshes heartbeat-derived columns on a Site row.
+// Empty string fields are skipped so a heartbeat that omits hostname doesn't
+// clobber a previously-set value. last_seen_at is always updated. lan_cidrs
+// is JSON-encoded into the lan_cidrs_json column.
+func (d *SiteDAO) UpdateAgentMeta(ctx context.Context, siteID uint64, hostname, osName, agentVersion string, lanCidrs []string) error {
+	now := time.Now().UTC()
+	updates := map[string]any{
+		"last_seen_at": &now,
+		"status":       model.SiteStatusOnline,
+	}
+	if hostname != "" {
+		updates["hostname"] = hostname
+	}
+	if osName != "" {
+		updates["os"] = osName
+	}
+	if agentVersion != "" {
+		updates["agent_version"] = agentVersion
+	}
+	if len(lanCidrs) > 0 {
+		b, err := json.Marshal(lanCidrs)
+		if err != nil {
+			return fmt.Errorf("dao: marshal lan_cidrs: %w", err)
+		}
+		updates["lan_cidrs_json"] = string(b)
+	}
+	res := d.db.WithContext(ctx).Model(&model.Site{}).
+		Where("id = ?", siteID).
+		Updates(updates)
+	if res.Error != nil {
+		return fmt.Errorf("dao: update agent meta: %w", res.Error)
+	}
+	return nil
 }
 
 // ListByProject returns up to pageSize sites in projectID, paged by ID cursor.
