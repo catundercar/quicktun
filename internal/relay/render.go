@@ -17,7 +17,8 @@ type ServiceBinding struct {
 	SiteSlug    string
 	ServiceSlug string
 	RelayPort   uint16
-	AgentToken  string // hash is OK — agent stores the same hash
+	AgentToken  string // sha256_hex of the raw token — agent computes the same hex
+	               // before presenting to rathole. See docs/07-token-contract.md.
 }
 
 // RenderRatholeServer returns a TOML config for a per-project rathole-server.
