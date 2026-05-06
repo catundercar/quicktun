@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -33,9 +34,22 @@ func AgentFromContext(ctx context.Context) (*AgentPrincipal, bool) {
 // tokens. Methods outside /quicktun.v1.AgentService/* pass through (the
 // operator interceptor handles those).
 //
-// Token matching is sha256_hex(raw) == site_agent_tokens.token_hash. The
-// principal's SiteID and ProjectID are attached to the request context.
-func AgentInterceptor(db *gorm.DB) grpc.UnaryServerInterceptor {
+// Token validation does the SHA-256 hash + expires_at comparison in SQL
+// (`expires_at IS NULL OR expires_at > ?`) and bumps last_used_at. The
+// owning Site is then loaded so the principal carries both SiteID and
+// ProjectID.
+//
+// This logic mirrors dao.SiteAgentTokenDAO.ValidateRaw; we cannot import
+// the dao package here because dao already depends on auth (HashToken /
+// IssueToken), which would create an import cycle.
+//
+// Errors are scrubbed: the client always sees "invalid or expired token"
+// (Unauthenticated) or a generic "internal error" (Internal); the underlying
+// detail is logged server-side via lg.
+func AgentInterceptor(db *gorm.DB, lg *zap.Logger) grpc.UnaryServerInterceptor {
+	if lg == nil {
+		lg = zap.NewNop()
+	}
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if !strings.HasPrefix(info.FullMethod, "/quicktun.v1.AgentService/") {
 			return handler(ctx, req)
@@ -44,25 +58,39 @@ func AgentInterceptor(db *gorm.DB) grpc.UnaryServerInterceptor {
 		if raw == "" {
 			return nil, status.Error(codes.Unauthenticated, "missing bearer token")
 		}
-		hexHash := HashToken(raw)
 
 		var tok model.SiteAgentToken
 		err := db.WithContext(ctx).
-			Where("token_hash = ?", hexHash).
+			Where("token_hash = ?", HashToken(raw)).
+			Where("expires_at IS NULL OR expires_at > ?", time.Now().UTC()).
 			First(&tok).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, status.Error(codes.Unauthenticated, "invalid token")
+			return nil, status.Error(codes.Unauthenticated, "invalid or expired token")
 		}
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "auth lookup: %v", err)
-		}
-		if tok.ExpiresAt != nil && tok.ExpiresAt.Before(time.Now()) {
-			return nil, status.Error(codes.Unauthenticated, "token expired")
+			lg.Warn("agent auth: token lookup failed", zap.Error(err))
+			return nil, status.Error(codes.Internal, "internal error")
 		}
 
 		var site model.Site
-		if err := db.WithContext(ctx).First(&site, tok.SiteID).Error; err != nil {
-			return nil, status.Errorf(codes.Internal, "site lookup: %v", err)
+		err = db.WithContext(ctx).First(&site, tok.SiteID).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			lg.Warn("agent auth: token resolved to missing site",
+				zap.Uint64("site_id", tok.SiteID))
+			return nil, status.Error(codes.Unauthenticated, "invalid or expired token")
+		}
+		if err != nil {
+			lg.Warn("agent auth: site lookup failed", zap.Error(err))
+			return nil, status.Error(codes.Internal, "internal error")
+		}
+
+		// Best-effort last_used_at refresh; failures are logged but do not
+		// fail the request.
+		now := time.Now().UTC()
+		if err := db.WithContext(ctx).Model(&model.SiteAgentToken{}).
+			Where("id = ?", tok.ID).
+			Update("last_used_at", &now).Error; err != nil {
+			lg.Warn("agent auth: last_used_at update failed", zap.Error(err))
 		}
 
 		ctx = context.WithValue(ctx, agentCtxKey{}, &AgentPrincipal{

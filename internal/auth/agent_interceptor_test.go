@@ -50,7 +50,7 @@ func mkSiteWithToken(t *testing.T, db *gorm.DB, ttl time.Duration) (*model.Site,
 func TestAgentInterceptorAcceptsValidToken(t *testing.T) {
 	db := openTestDB(t)
 	site, raw := mkSiteWithToken(t, db, 5*time.Minute)
-	intc := auth.AgentInterceptor(db)
+	intc := auth.AgentInterceptor(db, nil)
 
 	var seen *auth.AgentPrincipal
 	var called bool
@@ -78,7 +78,7 @@ func TestAgentInterceptorAcceptsValidToken(t *testing.T) {
 func TestAgentInterceptorRejectsBadToken(t *testing.T) {
 	db := openTestDB(t)
 	_, _ = mkSiteWithToken(t, db, 5*time.Minute)
-	intc := auth.AgentInterceptor(db)
+	intc := auth.AgentInterceptor(db, nil)
 
 	handler := func(ctx context.Context, req any) (any, error) {
 		t.Fatalf("handler should not be called")
@@ -98,10 +98,12 @@ func TestAgentInterceptorRejectsBadToken(t *testing.T) {
 func TestAgentInterceptorRejectsExpiredToken(t *testing.T) {
 	db := openTestDB(t)
 	_, raw := mkSiteWithToken(t, db, 5*time.Minute)
-	intc := auth.AgentInterceptor(db)
+	intc := auth.AgentInterceptor(db, nil)
 
-	// Force expire_time into the past.
-	past := time.Now().Add(-1 * time.Hour)
+	// Force expire_time into the past. Use UTC to match how the DAO
+	// stores expires_at and how the interceptor compares it (SQL-side
+	// comparison would otherwise be timezone-fragile).
+	past := time.Now().UTC().Add(-1 * time.Hour)
 	require.NoError(t, db.Model(&model.SiteAgentToken{}).
 		Where("token_hash = ?", auth.HashToken(raw)).
 		Update("expires_at", &past).Error)
@@ -122,7 +124,7 @@ func TestAgentInterceptorRejectsExpiredToken(t *testing.T) {
 
 func TestAgentInterceptorPassesThroughNonAgentMethods(t *testing.T) {
 	db := openTestDB(t)
-	intc := auth.AgentInterceptor(db)
+	intc := auth.AgentInterceptor(db, nil)
 
 	called := false
 	handler := func(ctx context.Context, req any) (any, error) {
@@ -138,4 +140,51 @@ func TestAgentInterceptorPassesThroughNonAgentMethods(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ok", resp)
 	require.True(t, called)
+}
+
+func TestAgentInterceptorRejectsMissingAuthHeader(t *testing.T) {
+	db := openTestDB(t)
+	_, _ = mkSiteWithToken(t, db, 5*time.Minute)
+	intc := auth.AgentInterceptor(db, nil)
+
+	handler := func(ctx context.Context, req any) (any, error) {
+		t.Fatalf("handler should not be called")
+		return nil, nil
+	}
+	// No authorization metadata at all.
+	_, err := intc(context.Background(), nil,
+		&grpc.UnaryServerInfo{FullMethod: "/quicktun.v1.AgentService/Bootstrap"},
+		handler)
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	require.Equal(t, codes.Unauthenticated, st.Code())
+}
+
+func TestAgentInterceptorRejectsOrphanedToken(t *testing.T) {
+	db := openTestDB(t)
+	site, raw := mkSiteWithToken(t, db, 5*time.Minute)
+	intc := auth.AgentInterceptor(db, nil)
+
+	// Hard-delete the site row so the token resolves to nothing. Using
+	// Unscoped to bypass soft-delete guarantees the site lookup fails
+	// even if ValidateRaw still returns a SiteID.
+	require.NoError(t, db.Unscoped().Delete(&model.Site{}, site.ID).Error)
+
+	handler := func(ctx context.Context, req any) (any, error) {
+		t.Fatalf("handler should not be called")
+		return nil, nil
+	}
+	md := metadata.Pairs("authorization", "Bearer "+raw)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	_, err := intc(ctx, nil,
+		&grpc.UnaryServerInfo{FullMethod: "/quicktun.v1.AgentService/Bootstrap"},
+		handler)
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	// Orphaned token must NOT leak as Internal — that would surface the
+	// "site row missing" detail. It should look identical to any other
+	// invalid token.
+	require.Equal(t, codes.Unauthenticated, st.Code())
 }
