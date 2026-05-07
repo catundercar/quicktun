@@ -116,4 +116,6 @@ database:
 	require.Equal(t, []string{"--server"}, cfg.Backend.RatholeArgs)
 	require.Equal(t, "/var/lib/quicktun/relays", cfg.Backend.RatholeConfigDir)
 	require.Equal(t, "", cfg.Backend.AuthProxyPublicAddr)
+	require.Equal(t, 30*time.Second, cfg.Backend.SweeperInterval)
+	require.Equal(t, 90*time.Second, cfg.Backend.SiteOfflineAfter)
 }

@@ -117,6 +117,56 @@ func TestSiteDAOCountServices(t *testing.T) {
 	require.Equal(t, int64(1), n)
 }
 
+func TestMarkStaleOffline(t *testing.T) {
+	db := openWithModels(t)
+	p := mkProject(t, db, "p")
+	store := dao.NewSiteDAO(db)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	fresh := now.Add(-10 * time.Second)
+	stale := now.Add(-5 * time.Minute)
+
+	// Online + fresh heartbeat — must NOT flip.
+	freshSite, err := store.Create(ctx, &model.Site{
+		ProjectID: p.ID, Name: "fresh",
+		Status: model.SiteStatusOnline, LastSeenAt: &fresh,
+	})
+	require.NoError(t, err)
+
+	// Online + stale heartbeat — MUST flip to offline.
+	staleSite, err := store.Create(ctx, &model.Site{
+		ProjectID: p.ID, Name: "stale",
+		Status: model.SiteStatusOnline, LastSeenAt: &stale,
+	})
+	require.NoError(t, err)
+
+	// Pending + stale heartbeat — must NOT flip (preserve "never seen yet").
+	pendingSite, err := store.Create(ctx, &model.Site{
+		ProjectID: p.ID, Name: "pending",
+		Status: model.SiteStatusPending, LastSeenAt: &stale,
+	})
+	require.NoError(t, err)
+
+	// Threshold is 1 minute ago: fresh is after, stale is before.
+	threshold := now.Add(-1 * time.Minute)
+	n, err := store.MarkStaleOffline(ctx, threshold)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	got, err := store.FindByID(ctx, freshSite.ID)
+	require.NoError(t, err)
+	require.Equal(t, model.SiteStatusOnline, got.Status)
+
+	got, err = store.FindByID(ctx, staleSite.ID)
+	require.NoError(t, err)
+	require.Equal(t, model.SiteStatusOffline, got.Status)
+
+	got, err = store.FindByID(ctx, pendingSite.ID)
+	require.NoError(t, err)
+	require.Equal(t, model.SiteStatusPending, got.Status)
+}
+
 func TestSiteAgentTokenIssueAndValidate(t *testing.T) {
 	db := openWithModels(t)
 	p := mkProject(t, db, "p")

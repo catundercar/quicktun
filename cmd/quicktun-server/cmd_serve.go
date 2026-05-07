@@ -59,6 +59,8 @@ func serveCmd() *cobra.Command {
 				RatholeConfigDir:    cfg.Backend.RatholeConfigDir,
 				AuthProxyPublicAddr: cfg.Backend.AuthProxyPublicAddr,
 				SessionTTL:          cfg.Session.DefaultTTL,
+				SweeperInterval:     cfg.Backend.SweeperInterval,
+				SiteOfflineAfter:    cfg.Backend.SiteOfflineAfter,
 			})
 			if err != nil {
 				return err

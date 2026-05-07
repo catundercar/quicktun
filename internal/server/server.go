@@ -30,6 +30,7 @@ import (
 	"github.com/tulip/quicktun/internal/dao"
 	"github.com/tulip/quicktun/internal/grpcsvc"
 	"github.com/tulip/quicktun/internal/relay"
+	"github.com/tulip/quicktun/internal/sweeper"
 )
 
 // Config bundles construction parameters for Server.
@@ -44,6 +45,8 @@ type Config struct {
 	RatholeConfigDir    string
 	AuthProxyPublicAddr string
 	SessionTTL          time.Duration
+	SweeperInterval     time.Duration
+	SiteOfflineAfter    time.Duration
 }
 
 // Server runs the gRPC server and grpc-gateway HTTP server side-by-side.
@@ -137,6 +140,15 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := s.relay.Start(ctx); err != nil {
 		return fmt.Errorf("server: relay manager start: %w", err)
 	}
+
+	// Site liveness sweeper. Goroutine exits when ctx is cancelled (driven by
+	// the same shutdown path that stops the gRPC + HTTP servers below), so
+	// no separate Stop() coordination is needed.
+	sw := sweeper.New(dao.NewSiteDAO(s.cfg.DB), sweeper.Config{
+		Interval:     s.cfg.SweeperInterval,
+		OfflineAfter: s.cfg.SiteOfflineAfter,
+	}, s.cfg.Logger)
+	go sw.Run(ctx)
 
 	grpcLn, err := net.Listen("tcp", s.cfg.GRPCListen)
 	if err != nil {

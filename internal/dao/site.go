@@ -112,6 +112,24 @@ func (d *SiteDAO) SetStatus(ctx context.Context, siteID uint64, s model.SiteStat
 	return nil
 }
 
+// MarkStaleOffline updates every site whose status is online and last_seen_at
+// is before threshold to status=offline. Returns the count of rows updated.
+//
+// Sites with status=pending are intentionally skipped: a "never seen yet" row
+// is more useful to the human eye than a misleading offline flip. Sites with
+// last_seen_at IS NULL are also skipped — that's the same "never reported"
+// state, just without the explicit pending status.
+func (d *SiteDAO) MarkStaleOffline(ctx context.Context, threshold time.Time) (int64, error) {
+	res := d.db.WithContext(ctx).Model(&model.Site{}).
+		Where("status = ? AND last_seen_at IS NOT NULL AND last_seen_at < ?",
+			model.SiteStatusOnline, threshold).
+		Update("status", model.SiteStatusOffline)
+	if res.Error != nil {
+		return 0, fmt.Errorf("dao: mark stale offline: %w", res.Error)
+	}
+	return res.RowsAffected, nil
+}
+
 // ListByProject returns up to pageSize sites in projectID, paged by ID cursor.
 func (d *SiteDAO) ListByProject(ctx context.Context, projectID uint64, pageSize int, pageToken string) ([]model.Site, error) {
 	if pageSize <= 0 {

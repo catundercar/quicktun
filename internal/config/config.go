@@ -33,10 +33,12 @@ type Config struct {
 
 // BackendConfig configures the relay backend (Phase 1: rathole).
 type BackendConfig struct {
-	RatholeBinary       string   `mapstructure:"rathole_binary"`
-	RatholeArgs         []string `mapstructure:"rathole_args"`
-	RatholeConfigDir    string   `mapstructure:"rathole_config_dir"`
-	AuthProxyPublicAddr string   `mapstructure:"auth_proxy_public_addr"` // empty → legacy direct-rathole fallback
+	RatholeBinary       string        `mapstructure:"rathole_binary"`
+	RatholeArgs         []string      `mapstructure:"rathole_args"`
+	RatholeConfigDir    string        `mapstructure:"rathole_config_dir"`
+	AuthProxyPublicAddr string        `mapstructure:"auth_proxy_public_addr"` // empty → legacy direct-rathole fallback
+	SweeperInterval     time.Duration `mapstructure:"sweeper_interval"`       // 0 disables the sweeper
+	SiteOfflineAfter    time.Duration `mapstructure:"site_offline_after"`     // 0 disables the sweeper
 }
 
 // ControlPlaneConfig holds gRPC + grpc-gateway listener settings.
@@ -125,4 +127,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("backend.rathole_binary", "rathole")
 	v.SetDefault("backend.rathole_args", []string{"--server"})
 	v.SetDefault("backend.rathole_config_dir", "/var/lib/quicktun/relays")
+	v.SetDefault("backend.sweeper_interval", "30s")
+	v.SetDefault("backend.site_offline_after", "90s")
 }
