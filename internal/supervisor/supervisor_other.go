@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package supervisor
 
@@ -7,10 +7,10 @@ import (
 	"syscall"
 )
 
-// termSignal is what Stop() sends. SIGTERM works on darwin/windows.
+// termSignal is what Stop() sends. SIGTERM works on darwin.
 var termSignal os.Signal = syscall.SIGTERM
 
 func platformSysProcAttr() *syscall.SysProcAttr {
-	// macOS / Windows: best-effort. Process won't auto-die when parent dies.
+	// macOS: best-effort. Process won't auto-die when parent dies.
 	return &syscall.SysProcAttr{}
 }

@@ -118,6 +118,10 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	if err := platformAfterStart(cmd); err != nil {
+		s.lg.Warn("supervisor: post-start hook failed",
+			zap.String("name", s.spec.Name), zap.Error(err))
+	}
 
 	s.mu.Lock()
 	s.cmd = cmd
