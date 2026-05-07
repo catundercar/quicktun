@@ -131,6 +131,9 @@ func New(cfg Config) (*Server, error) {
 	)
 	quicktunv1.RegisterAgentServiceServer(gs, agentSvc)
 
+	adminSvc := grpcsvc.NewAdminService(cfg.DB, mgr)
+	quicktunv1.RegisterAdminServiceServer(gs, adminSvc)
+
 	return &Server{cfg: cfg, grpcServer: gs, relay: mgr}, nil
 }
 
@@ -178,6 +181,11 @@ func (s *Server) Run(ctx context.Context) error {
 		grpcLn.Close()
 		s.relay.Stop()
 		return fmt.Errorf("server: register service gateway: %w", err)
+	}
+	if err := quicktunv1.RegisterAdminServiceHandlerFromEndpoint(ctx, gatewayMux, s.cfg.GRPCListen, dialOpts); err != nil {
+		grpcLn.Close()
+		s.relay.Stop()
+		return fmt.Errorf("server: register admin gateway: %w", err)
 	}
 
 	// Mount /healthz on a top-level mux so probes (k8s, nginx, systemd) can

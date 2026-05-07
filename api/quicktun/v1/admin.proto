@@ -1,0 +1,46 @@
+// AdminService — operator-only system status queries.
+syntax = "proto3";
+
+package quicktun.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/tulip/quicktun/gen/go/quicktun/v1;quicktunv1";
+
+// AdminService exposes operator-only system status queries.
+service AdminService {
+  // GetSystemStatus aggregates DB counts + relay supervisor health.
+  // Admin-only (interceptor enforces).
+  rpc GetSystemStatus(GetSystemStatusRequest) returns (GetSystemStatusResponse) {
+    option (google.api.http) = {
+      get: "/v1/admin:status"
+    };
+  }
+}
+
+message GetSystemStatusRequest {}
+
+message GetSystemStatusResponse {
+  uint32 operator_count = 1;
+  uint32 project_count_active = 2;
+  uint32 project_count_disabled = 3;
+  uint32 site_count_online = 4;
+  uint32 site_count_offline = 5;
+  uint32 site_count_pending = 6;
+  uint32 service_count = 7;
+  uint32 supervisor_running_count = 8;
+  google.protobuf.Timestamp now = 9;
+
+  // Sites that are online but haven't heartbeat'd in a while; about to flip
+  // offline on the next sweeper tick. Surfaces fading-health agents.
+  repeated SiteHealthSummary stale_sites = 10;
+}
+
+message SiteHealthSummary {
+  // Canonical resource name: projects/{project}/sites/{site}.
+  string name = 1;
+  google.protobuf.Timestamp last_seen_at = 2;
+  string status = 3;
+  string hostname = 4;
+}

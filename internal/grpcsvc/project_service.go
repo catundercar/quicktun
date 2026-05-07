@@ -25,6 +25,7 @@ type RelayManager interface {
 	AddProject(ctx context.Context, projectID uint64) error
 	RemoveProject(ctx context.Context, projectID uint64) error
 	Refresh(ctx context.Context, projectID uint64) error
+	SupervisorCount() int
 }
 
 // noopRelayManager satisfies RelayManager but does nothing. Used by services
@@ -34,6 +35,7 @@ type noopRelayManager struct{}
 func (noopRelayManager) AddProject(context.Context, uint64) error    { return nil }
 func (noopRelayManager) RemoveProject(context.Context, uint64) error { return nil }
 func (noopRelayManager) Refresh(context.Context, uint64) error       { return nil }
+func (noopRelayManager) SupervisorCount() int                        { return 0 }
 
 // ProjectService implements quicktunv1.ProjectServiceServer.
 type ProjectService struct {

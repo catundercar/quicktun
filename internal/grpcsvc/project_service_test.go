@@ -39,6 +39,7 @@ func (r *recordingRelay) Refresh(_ context.Context, id uint64) error {
 	r.refreshed = append(r.refreshed, id)
 	return nil
 }
+func (r *recordingRelay) SupervisorCount() int { return 0 }
 
 func newProjectService(t *testing.T, db *gorm.DB) *grpcsvc.ProjectService {
 	return grpcsvc.NewProjectService(dao.NewProjectDAO(db), audit.NewWriter(db), zap.NewNop(), nil)
