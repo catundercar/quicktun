@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  quicktun-agent MSI installer (WiX 5)
+
+  Build variables (pass with -define):
+    AgentExePath          absolute path to quicktun-agent.exe
+    AgentYamlExamplePath  absolute path to deploy/windows/agent.yaml.example
+
+  IMPORTANT: The UpgradeCode GUID below identifies this product across ALL
+  releases. It must NEVER change between versions — changing it would cause
+  Windows to treat an upgrade as a new product and leave the old installation
+  behind. Generated once: 6F2A8E1C-3D4B-4F57-9A0C-2B8E5F1A7C3D
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="quicktun-agent"
+           Manufacturer="quicktun"
+           Version="!(bind.FileVersion.QuicktunAgentExe)"
+           UpgradeCode="6F2A8E1C-3D4B-4F57-9A0C-2B8E5F1A7C3D"
+           Compressed="yes"
+           Scope="perMachine">
+
+    <SummaryInformation Description="quicktun site agent — Windows service installer" />
+
+    <!--
+      MajorUpgrade: allow in-place upgrades (same or newer version).
+      Downgrades are blocked with a user-facing error message.
+    -->
+    <MajorUpgrade
+        DowngradeErrorMessage="A newer version of quicktun-agent is already installed. Uninstall it first." />
+
+    <!-- ───────────── Directory layout ───────────── -->
+
+    <!-- C:\Program Files\quicktun\ -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLDIR" Name="quicktun" />
+    </StandardDirectory>
+
+    <!-- C:\ProgramData\quicktun\ -->
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DataDir" Name="quicktun">
+        <Directory Id="LogsDir"  Name="logs" />
+        <Directory Id="StateDir" Name="agent-state" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- ───────────── Features ───────────── -->
+
+    <Feature Id="Main" Title="quicktun-agent" Level="1">
+      <ComponentGroupRef Id="AgentBinaryComponents" />
+      <ComponentGroupRef Id="ConfigComponents" />
+    </Feature>
+
+    <!-- ───────────── Components ───────────── -->
+
+    <!--
+      AgentBinaryComponents: installs the exe + registers the Windows service.
+
+      The service calls:
+        quicktun-agent.exe service-run --config "C:\ProgramData\quicktun\agent.yaml"
+
+      The service-run subcommand implements svc.Handler (golang.org/x/sys/windows/svc)
+      so the SCM can cleanly start/stop/interrogate it without an NSSM wrapper.
+    -->
+    <ComponentGroup Id="AgentBinaryComponents" Directory="INSTALLDIR">
+      <Component Id="AgentExe">
+        <File Id="QuicktunAgentExe"
+              Source="$(var.AgentExePath)"
+              KeyPath="yes" />
+
+        <ServiceInstall Id="QuicktunAgentService"
+                        Name="quicktun-agent"
+                        DisplayName="quicktun site agent"
+                        Description="Tunnels local services to the quicktun control plane via rathole."
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Vital="yes"
+                        Account="LocalSystem"
+                        Arguments="service-run --config &quot;[CommonAppDataFolder]quicktun\agent.yaml&quot;" />
+
+        <!--
+          ServiceControl: start on install, stop on uninstall/upgrade.
+          Wait="yes" so the installer blocks until the service transitions.
+        -->
+        <ServiceControl Id="QuicktunAgentServiceControl"
+                        Name="quicktun-agent"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!--
+      ConfigComponents: drops agent.yaml.example into C:\ProgramData\quicktun\.
+      The operator copies this to agent.yaml and fills in the token before
+      starting the service.
+    -->
+    <ComponentGroup Id="ConfigComponents" Directory="DataDir">
+      <Component Id="AgentYamlExampleComp" Guid="*">
+        <File Id="AgentYamlExampleFile"
+              Name="agent.yaml.example"
+              Source="$(var.AgentYamlExamplePath)"
+              KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+  </Package>
+</Wix>

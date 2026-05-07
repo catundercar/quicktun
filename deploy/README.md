@@ -400,3 +400,7 @@ systemctl restart quicktun-agent
 
 `migrate` runs as `ExecStartPre` on the server, so DB schema bumps apply
 automatically on restart.
+
+---
+
+> For Windows operators: the MSI installer is the recommended path. See [deploy/windows/MSI.md](windows/MSI.md).
