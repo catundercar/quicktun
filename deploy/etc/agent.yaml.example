@@ -1,0 +1,27 @@
+# /etc/quicktun/agent.yaml — quicktun site agent config
+# See internal/agent/config.go for the full schema.
+# Replace CONTROL_DOMAIN and PASTE_FROM_INSTALL_COMMAND.
+
+# gRPC address of the quicktun control plane.
+control_endpoint: CONTROL_DOMAIN:443
+
+# Raw agent token issued by `quicktun site get-install-command` /
+# `quicktun site rotate-agent-token`. The agent presents this verbatim as
+# a Bearer credential and computes sha256_hex(token) for the rendered
+# rathole-client.toml.
+token: PASTE_FROM_INSTALL_COMMAND
+
+# Where the agent renders rathole-client.toml (created on startup).
+state_dir: /var/lib/quicktun-agent
+
+# Path to the rathole binary. Empty string = render-only mode (no
+# subprocess spawned) — useful for smoke tests, NOT what you want in
+# production.
+rathole_binary: /usr/local/bin/rathole
+
+# Args appended after the rendered config path when invoking rathole.
+rathole_args: ["--client"]
+
+# Set true ONLY for dev (e.g. self-signed cert on the control plane).
+# Production deployments must keep this false.
+tls_insecure: false
