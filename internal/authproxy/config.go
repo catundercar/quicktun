@@ -13,6 +13,13 @@ type Config struct {
 	// Default: ":8443".
 	ListenAddr string `yaml:"listen_addr"`
 
+	// HealthListenAddr is the bind address for the /healthz HTTP endpoint.
+	// Default: "127.0.0.1:8444". Set to empty string to disable. Loopback
+	// default keeps health checks reachable from local probes (systemd,
+	// monitoring sidecar) without exposing the endpoint to the public
+	// network — operators who need external probing should override.
+	HealthListenAddr string `yaml:"health_listen_addr"`
+
 	// Database holds the path to the control plane's SQLite file. The
 	// auth-proxy reads (token validation, project lookup) without writing.
 	// Required.
@@ -46,6 +53,14 @@ func LoadConfig(path string) (*Config, error) {
 func (c *Config) applyDefaults() {
 	if c.ListenAddr == "" {
 		c.ListenAddr = ":8443"
+	}
+	// HealthListenAddr defaults to loopback only when the user did not
+	// supply the key at all. We can't distinguish "omitted" from "explicit
+	// empty" with yaml.v3, so an explicit empty string in YAML is treated
+	// the same as omission and gets the default. Operators who want to
+	// disable health must override at runtime (e.g. via a wrapper config).
+	if c.HealthListenAddr == "" {
+		c.HealthListenAddr = "127.0.0.1:8444"
 	}
 	if c.Log.Level == "" {
 		c.Log.Level = "info"

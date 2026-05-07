@@ -52,6 +52,13 @@ type Config struct {
 	// HostnameOverride forces a hostname reported in Bootstrap/Heartbeat.
 	// When empty, os.Hostname() is used.
 	HostnameOverride string `yaml:"hostname_override"`
+
+	// HealthListenAddr is the bind address for the agent's /healthz HTTP
+	// endpoint. Empty (the default) disables it. Operators who want
+	// systemd/launchd to probe should set e.g. "127.0.0.1:8445". Phase 1
+	// keeps this off-by-default to avoid binding a port on hosts where the
+	// operator isn't using probes.
+	HealthListenAddr string `yaml:"health_listen_addr"`
 }
 
 // Load reads + parses a YAML config file, applies defaults, and validates

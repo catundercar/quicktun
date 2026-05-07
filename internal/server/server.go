@@ -29,6 +29,7 @@ import (
 	"github.com/tulip/quicktun/internal/auth"
 	"github.com/tulip/quicktun/internal/dao"
 	"github.com/tulip/quicktun/internal/grpcsvc"
+	"github.com/tulip/quicktun/internal/health"
 	"github.com/tulip/quicktun/internal/relay"
 	"github.com/tulip/quicktun/internal/sweeper"
 )
@@ -179,9 +180,26 @@ func (s *Server) Run(ctx context.Context) error {
 		return fmt.Errorf("server: register service gateway: %w", err)
 	}
 
+	// Mount /healthz on a top-level mux so probes (k8s, nginx, systemd) can
+	// hit it without going through grpc-gateway's catch-all routing. Anything
+	// not /healthz falls through to the gateway. Health = DB ping succeeds.
+	healthCheck := func() (bool, []string) {
+		sqlDB, err := s.cfg.DB.DB()
+		if err != nil {
+			return false, []string{"db: " + err.Error()}
+		}
+		if err := sqlDB.Ping(); err != nil {
+			return false, []string{"db ping: " + err.Error()}
+		}
+		return true, nil
+	}
+	rootMux := http.NewServeMux()
+	rootMux.Handle("/healthz", health.Handler(healthCheck))
+	rootMux.Handle("/", gatewayMux)
+
 	s.httpServer = &http.Server{
 		Addr:              s.cfg.HTTPListen,
-		Handler:           recoverHandler(s.cfg.Logger, gatewayMux),
+		Handler:           recoverHandler(s.cfg.Logger, rootMux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

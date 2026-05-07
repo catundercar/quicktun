@@ -53,6 +53,8 @@ token: t
 	// RatholeBinary stays empty (render-only mode), per documented contract.
 	require.Equal(t, "", cfg.RatholeBinary)
 	require.False(t, cfg.TLSInsecure)
+	// HealthListenAddr is off-by-default: operators must opt in.
+	require.Equal(t, "", cfg.HealthListenAddr)
 }
 
 func TestLoadRequiresControlEndpoint(t *testing.T) {

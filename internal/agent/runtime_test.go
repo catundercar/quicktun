@@ -450,6 +450,51 @@ func TestRuntimeStartsBridgeWhenAuthProxyConfigured(t *testing.T) {
 	}
 }
 
+// TestRuntimeHealthCheckRequiresBootstrap verifies the agent reports
+// degraded when applyBootstrap has never run. This is the cold-start
+// signal probes care about: if a probe sees "ok" before the first
+// successful bootstrap, the health endpoint is lying.
+func TestRuntimeHealthCheckRequiresBootstrap(t *testing.T) {
+	r := agent.NewRuntimeForHealthTest(&agent.Config{})
+	ok, reasons := r.HealthCheck()
+	require.False(t, ok)
+	require.Contains(t, reasons, "agent has not bootstrapped yet")
+}
+
+// TestRuntimeHealthCheckOkInRenderOnly verifies render-only mode reports
+// healthy once a bootstrap has happened — we deliberately do NOT require
+// a running supervisor when RatholeBinary is empty.
+func TestRuntimeHealthCheckOkInRenderOnly(t *testing.T) {
+	r := agent.NewRuntimeForHealthTest(&agent.Config{ /* RatholeBinary empty */ })
+	r.SetLastBootstrapAtForTest(time.Now())
+	r.SetHeartbeatIntervalForTest(15 * time.Second)
+	ok, reasons := r.HealthCheck()
+	require.True(t, ok, "expected healthy; reasons=%v", reasons)
+	require.Empty(t, reasons)
+}
+
+// TestRuntimeHealthCheckStaleBootstrap verifies a long-stale lastBootstrapAt
+// flips the agent to degraded.
+func TestRuntimeHealthCheckStaleBootstrap(t *testing.T) {
+	r := agent.NewRuntimeForHealthTest(&agent.Config{})
+	r.SetHeartbeatIntervalForTest(1 * time.Second)
+	r.SetLastBootstrapAtForTest(time.Now().Add(-1 * time.Minute))
+	ok, reasons := r.HealthCheck()
+	require.False(t, ok)
+	require.Contains(t, reasons, "stale bootstrap")
+}
+
+// TestRuntimeHealthCheckSupervisorMissing verifies that with RatholeBinary
+// configured but no supervisor running, the check returns degraded.
+func TestRuntimeHealthCheckSupervisorMissing(t *testing.T) {
+	r := agent.NewRuntimeForHealthTest(&agent.Config{RatholeBinary: "/usr/local/bin/rathole"})
+	r.SetLastBootstrapAtForTest(time.Now())
+	r.SetHeartbeatIntervalForTest(15 * time.Second)
+	ok, reasons := r.HealthCheck()
+	require.False(t, ok)
+	require.Contains(t, reasons, "supervisor not running")
+}
+
 // stubAgentServerWithEndpoint is a stub Bootstrap server whose response
 // carries a configurable AuthProxyEndpoint. Distinct from stubAgentServer
 // (which hardcodes "relay.test:20000") so the bridge test can plug in the

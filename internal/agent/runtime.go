@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,6 +19,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	quicktunv1 "github.com/tulip/quicktun/gen/go/quicktun/v1"
+	"github.com/tulip/quicktun/internal/health"
 	"github.com/tulip/quicktun/internal/supervisor"
 )
 
@@ -47,17 +49,27 @@ type Runtime struct {
 	conn *grpc.ClientConn
 	cli  quicktunv1.AgentServiceClient
 
-	// supMu guards the supervisor lifecycle fields (cancel + done) and
-	// curVersion. Heartbeat reads curVersion, applyBootstrap writes both.
-	// Invariant: at most one supervisor goroutine is alive at a time.
-	// startSupervisor publishes (supCancel, supDone) under the lock;
-	// stopSupervisor swaps both to nil under the lock and then waits on
+	// supMu guards the supervisor lifecycle fields (cancel + done), the
+	// retained supervisor pointer, curVersion, lastBootstrapAt, and
+	// heartbeatInterval. Heartbeat reads curVersion, applyBootstrap writes
+	// both. Invariant: at most one supervisor goroutine is alive at a time.
+	// startSupervisor publishes (supCancel, supDone, sup) under the lock;
+	// stopSupervisor swaps them to nil under the lock and then waits on
 	// the snapshotted done channel after releasing it (so the goroutine
 	// can finish without blocking on supMu).
 	supMu      sync.Mutex
 	supCancel  context.CancelFunc
 	supDone    chan struct{}
+	sup        *supervisor.Supervisor
 	curVersion string
+	// lastBootstrapAt is the wall-clock time of the most recent
+	// successful applyBootstrap. Health checks compare it against
+	// 2 × heartbeatInterval to flag a stale agent.
+	lastBootstrapAt time.Time
+	// heartbeatInterval is what Run computed from the most recent
+	// BootstrapResponse. Used by the health check to decide what
+	// "stale" means; zero means "use defaultHeartbeat".
+	heartbeatInterval time.Duration
 
 	// bridge is the in-process CONNECT proxy between rathole-client and the
 	// auth-proxy. Set once after the first successful Bootstrap (when the
@@ -151,6 +163,17 @@ func (r *Runtime) Run(ctx context.Context) error {
 	if hbInterval <= 0 {
 		hbInterval = defaultHeartbeat
 	}
+	r.supMu.Lock()
+	r.heartbeatInterval = hbInterval
+	r.supMu.Unlock()
+
+	// Start the health endpoint after the first applyBootstrap so the very
+	// first probe doesn't see "agent has not bootstrapped yet". When
+	// HealthListenAddr is empty (the default) this is a no-op.
+	if r.cfg.HealthListenAddr != "" {
+		go r.serveHealth(ctx)
+	}
+
 	tick := time.NewTicker(hbInterval)
 	defer tick.Stop()
 
@@ -273,6 +296,7 @@ func (r *Runtime) applyBootstrap(boot *quicktunv1.BootstrapResponse) error {
 
 	r.supMu.Lock()
 	r.curVersion = boot.GetConfigVersion()
+	r.lastBootstrapAt = time.Now()
 	r.supMu.Unlock()
 
 	// Render-only mode: skip subprocess spawn. Used in tests and smoke
@@ -311,6 +335,7 @@ func (r *Runtime) startSupervisor(cfgPath string) {
 	r.supMu.Lock()
 	r.supCancel = cancel
 	r.supDone = done
+	r.sup = sup
 	r.supMu.Unlock()
 
 	go func() {
@@ -324,6 +349,7 @@ func (r *Runtime) stopSupervisor() {
 	cancel, done := r.supCancel, r.supDone
 	r.supCancel = nil
 	r.supDone = nil
+	r.sup = nil
 	r.supMu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -356,3 +382,61 @@ func (b bearerCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[str
 // explicitly opted into TLSInsecure mode (dev). In production this returns
 // true, forcing gRPC to refuse to send the bearer token over plaintext.
 func (b bearerCreds) RequireTransportSecurity() bool { return !b.allowInsecure }
+
+// healthCheck implements the Checker contract for /healthz. It reports
+// "degraded" when the agent has never bootstrapped, when the most recent
+// bootstrap is older than 2 × heartbeat_interval (i.e. heartbeat loop has
+// silently stalled), or when the operator configured a rathole binary but
+// the supervisor isn't running. Exposed as a method so tests can drive it
+// directly without spinning up an HTTP listener.
+func (r *Runtime) healthCheck() (bool, []string) {
+	r.supMu.Lock()
+	lastBoot := r.lastBootstrapAt
+	hb := r.heartbeatInterval
+	sup := r.sup
+	r.supMu.Unlock()
+
+	var reasons []string
+	if lastBoot.IsZero() {
+		reasons = append(reasons, "agent has not bootstrapped yet")
+	} else {
+		// Use 2× heartbeat as the staleness threshold so a single missed
+		// tick doesn't flip the agent unhealthy. Fall back to a fixed
+		// 30s when heartbeatInterval isn't set yet (defensive — Run
+		// always sets it before calling serveHealth).
+		stale := 2 * hb
+		if stale <= 0 {
+			stale = 2 * defaultHeartbeat
+		}
+		if time.Since(lastBoot) > stale {
+			reasons = append(reasons, "stale bootstrap")
+		}
+	}
+	// In render-only mode (RatholeBinary == "") we deliberately don't
+	// require a running supervisor — that mode is for tests/smoke and
+	// reporting "supervisor not running" would be a false positive.
+	if r.cfg.RatholeBinary != "" && (sup == nil || sup.Pid() == 0) {
+		reasons = append(reasons, "supervisor not running")
+	}
+	return len(reasons) == 0, reasons
+}
+
+// serveHealth runs an HTTP server on r.cfg.HealthListenAddr that exposes
+// /healthz. Returns when the listener errors or ctx is cancelled. Logs (but
+// does not propagate) errors — health endpoint failures must not bring
+// down the agent.
+func (r *Runtime) serveHealth(ctx context.Context) {
+	mux := http.NewServeMux()
+	mux.Handle("/healthz", health.Handler(r.healthCheck))
+	srv := &http.Server{Addr: r.cfg.HealthListenAddr, Handler: mux}
+
+	go func() {
+		<-ctx.Done()
+		_ = srv.Shutdown(context.Background())
+	}()
+
+	r.lg.Info("agent: health endpoint listening", zap.String("addr", r.cfg.HealthListenAddr))
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		r.lg.Warn("agent: health endpoint stopped", zap.Error(err))
+	}
+}

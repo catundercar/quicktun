@@ -38,6 +38,7 @@ database:
 `))
 	require.NoError(t, err)
 	require.Equal(t, ":8443", cfg.ListenAddr)
+	require.Equal(t, "127.0.0.1:8444", cfg.HealthListenAddr)
 	require.Equal(t, "info", cfg.Log.Level)
 }
 
