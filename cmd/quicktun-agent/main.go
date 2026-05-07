@@ -21,6 +21,9 @@ func main() {
 
 	root.AddCommand(newRunCmd())
 	root.AddCommand(newVersionCmd())
+	if c := newServiceRunCmd(); c != nil {
+		root.AddCommand(c)
+	}
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
