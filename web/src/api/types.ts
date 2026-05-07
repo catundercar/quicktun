@@ -1,6 +1,5 @@
 // Mirrors api/quicktun/v1/*.proto JSON output.
 // gRPC-gateway emits camelCase JSON keys regardless of proto snake_case.
-// Extend this file as Task 2 wires up resource pages.
 
 export type Operator = {
   name: string;
@@ -26,7 +25,10 @@ export type Site = {
   status: string;
   lastSeenTime?: string;
   hostname?: string;
+  os?: string;
+  agentVersion?: string;
   mode: string;
+  createTime?: string;
 };
 
 export type Service = {
@@ -37,6 +39,7 @@ export type Service = {
   targetPort: number;
   proto: string;
   relayPort?: number;
+  createTime?: string;
 };
 
 export type StaleSite = {
@@ -63,4 +66,30 @@ export type LoginResponse = {
   accessToken: string;
   expireTime?: string;
   operator: Operator;
+};
+
+// Pagination meta (gRPC-gateway emits camelCase).
+export type PageMeta = {
+  nextPageToken?: string;
+  totalSize?: number;
+};
+
+export type ListProjectsResponse = {
+  projects?: Project[];
+  page?: PageMeta;
+};
+
+export type ListSitesResponse = {
+  sites?: Site[];
+  page?: PageMeta;
+};
+
+export type ListServicesResponse = {
+  services?: Service[];
+  page?: PageMeta;
+};
+
+export type RotateAgentTokenResponse = {
+  token: string;
+  expireTime?: string;
 };

@@ -3,20 +3,10 @@ import { LoginPage } from './auth/LoginPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
 import { AppShell } from './layout/AppShell';
 import { DashboardPage } from './pages/DashboardPage';
-
-// Empty stubs for the other pages — Task 2 will fill them.
-function ProjectsStub() {
-  return <div>项目（待实现）</div>;
-}
-function SitesStub() {
-  return <div>站点（待实现）</div>;
-}
-function ServicesStub() {
-  return <div>服务（待实现）</div>;
-}
-function OperatorsStub() {
-  return <div>操作员（待实现）</div>;
-}
+import { ProjectsPage } from './pages/ProjectsPage';
+import { SitesPage } from './pages/SitesPage';
+import { ServicesPage } from './pages/ServicesPage';
+import { OperatorsPage } from './pages/OperatorsPage';
 
 export default function App() {
   return (
@@ -31,10 +21,10 @@ export default function App() {
       >
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
-        <Route path="/projects" element={<ProjectsStub />} />
-        <Route path="/sites" element={<SitesStub />} />
-        <Route path="/services" element={<ServicesStub />} />
-        <Route path="/operators" element={<OperatorsStub />} />
+        <Route path="/projects" element={<ProjectsPage />} />
+        <Route path="/sites" element={<SitesPage />} />
+        <Route path="/services" element={<ServicesPage />} />
+        <Route path="/operators" element={<OperatorsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
