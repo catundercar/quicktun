@@ -31,6 +31,7 @@ import (
 	"github.com/tulip/quicktun/internal/grpcsvc"
 	"github.com/tulip/quicktun/internal/health"
 	"github.com/tulip/quicktun/internal/relay"
+	"github.com/tulip/quicktun/internal/server/webui"
 	"github.com/tulip/quicktun/internal/sweeper"
 )
 
@@ -201,9 +202,21 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		return true, nil
 	}
+	// Routing layout (longest-prefix wins on http.ServeMux):
+	//   /healthz    → health probe (Plan 11)
+	//   /v1/*       → grpc-gateway (existing JSON API)
+	//   everything else → embedded SPA (with index.html fallback for
+	//                     client-side routes like /dashboard, /projects)
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/healthz", health.Handler(healthCheck))
-	rootMux.Handle("/", gatewayMux)
+	rootMux.Handle("/v1/", gatewayMux)
+	rootMux.Handle("/", webui.Handler())
+
+	if webui.IsAvailable() {
+		s.cfg.Logger.Info("server: web UI embedded; available at HTTP root")
+	} else {
+		s.cfg.Logger.Info("server: web UI NOT embedded; only /v1/* and /healthz reachable. Build with 'cd web && npm run build'")
+	}
 
 	s.httpServer = &http.Server{
 		Addr:              s.cfg.HTTPListen,

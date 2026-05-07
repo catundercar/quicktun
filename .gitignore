@@ -43,3 +43,9 @@ etc/tls/*
 /web/node_modules/
 /web/dist/
 /web/.vite/
+
+# Embedded SPA copy consumed by //go:embed in internal/server/webui.
+# The .gitkeep sentinel is committed so `go build` works without an SPA;
+# Make populates the rest from web/dist before invoking `go build`.
+/internal/server/webui/dist/*
+!/internal/server/webui/dist/.gitkeep

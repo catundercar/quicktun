@@ -139,6 +139,8 @@ quicktun project list
 
 You should see an empty list and no auth errors.
 
+你也可以通过浏览器访问 `https://control.example.com/` 进入 web 管理界面（同一端口 + 同 session token）。
+
 ## 7. Create your first project + site + service
 
 ```bash
