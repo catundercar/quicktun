@@ -150,15 +150,16 @@ echo "agent render: PASS"
 
 # Verify content.
 EXPECTED_TOKEN_HEX=$(printf '%s' "$RAW_TOKEN" | shasum -a 256 | awk '{print $1}')
-EXPECTED_REMOTE_ADDR="127.0.0.1:20000"
 
 if ! grep -qF '[client]' "$RATHOLE_CFG"; then
   echo "FAIL: rathole config missing [client] block" >&2
   cat "$RATHOLE_CFG" >&2
   exit 1
 fi
-if ! grep -qF "remote_addr = \"$EXPECTED_REMOTE_ADDR\"" "$RATHOLE_CFG"; then
-  echo "FAIL: rathole config remote_addr != $EXPECTED_REMOTE_ADDR" >&2
+# Plan 8: agent renders remote_addr as the bridge's local addr
+# (127.0.0.1:<ephemeral>), which forwards to the auth-proxy or fallback.
+if ! grep -qE 'remote_addr = "127\.0\.0\.1:[0-9]+"' "$RATHOLE_CFG"; then
+  echo "FAIL: rathole config remote_addr is not 127.0.0.1:<port>" >&2
   cat "$RATHOLE_CFG" >&2
   exit 1
 fi
