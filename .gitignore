@@ -38,3 +38,8 @@ etc/tls/*
 /docs-site/node_modules/
 /docs-site/build/
 /docs-site/.docusaurus/
+
+# Web admin SPA
+/web/node_modules/
+/web/dist/
+/web/.vite/
