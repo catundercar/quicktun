@@ -267,6 +267,60 @@ acceptable for early adopters.
 
 ---
 
+## 8b. Windows agent installation
+
+Phase 1 supports Windows via [NSSM](https://nssm.cc/download) wrapping the agent
+as a Windows service. Tested on Windows 10/11 + Windows Server 2019/2022.
+
+### Prerequisites
+- PowerShell 5.1+ (preinstalled).
+- Administrator account.
+- nssm.exe (download + place beside the install script or on PATH).
+- rathole.exe (download from https://github.com/rapiz1/rathole/releases) at
+  `C:\Program Files\quicktun\rathole.exe`.
+- A built `quicktun-agent.exe` (cross-compile from a Linux/macOS dev machine:
+  `GOOS=windows GOARCH=amd64 go build -o bin/quicktun-agent.exe ./cmd/quicktun-agent`).
+
+### Install
+
+From PowerShell (as Administrator):
+
+```powershell
+.\deploy\windows\install-agent.ps1 `
+    -Token "<RAW_TOKEN>" `
+    -ControlEndpoint "control.example.com:443"
+```
+
+The script:
+1. Copies `quicktun-agent.exe` to `C:\Program Files\quicktun\`.
+2. Writes `C:\ProgramData\quicktun\agent.yaml` with restricted ACL (Administrators + SYSTEM only).
+3. Registers a Windows service `quicktun-agent` via NSSM with auto-start + log rotation (10 MB rotation).
+4. Starts the service.
+
+### Verify
+
+```powershell
+Get-Service quicktun-agent
+Get-Content -Tail 20 -Wait C:\ProgramData\quicktun\logs\agent.log
+```
+
+### Stop / remove
+
+```powershell
+.\deploy\windows\uninstall-agent.ps1            # stop + remove service only
+.\deploy\windows\uninstall-agent.ps1 -Purge     # also delete config + binary
+```
+
+### Phase 1 limitations
+
+- Service runs as `LocalSystem`. Phase 2 will add unprivileged user support
+  via `nssm set quicktun-agent ObjectName <user> <password>`.
+- No native `golang.org/x/sys/windows/svc` integration; we rely on NSSM as
+  the wrapper. This means the agent is a console binary that NSSM
+  background-runs. Acceptable for Phase 1.
+
+---
+
 ## 9. Verify the forward
 
 From your workstation:
