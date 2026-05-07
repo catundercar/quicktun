@@ -28,12 +28,13 @@ func TestRenderRatholeClientWithTunnels(t *testing.T) {
 		},
 	}
 
-	out, err := agent.RenderRatholeClient(boot, raw)
+	out, err := agent.RenderRatholeClient(boot, raw, "127.0.0.1:1234")
 	require.NoError(t, err)
 
-	// [client] header + remote_addr + sha256-hex token.
+	// [client] header + remote_addr + sha256-hex token. remote_addr is the
+	// caller-supplied bridge address (not the bootstrap's auth-proxy).
 	require.Contains(t, out, "[client]")
-	require.Contains(t, out, `remote_addr = "relay.test:20000"`)
+	require.Contains(t, out, `remote_addr = "127.0.0.1:1234"`)
 	require.Contains(t, out, `default_token = "`+wantHex+`"`)
 
 	// Service block keys are <site_slug>__<service_slug> (matches server-side).
@@ -58,29 +59,29 @@ func TestRenderRatholeClientNoTunnels(t *testing.T) {
 		SiteSlug:          "bastion-1",
 		AuthProxyEndpoint: "relay.test:20000",
 	}
-	out, err := agent.RenderRatholeClient(boot, "tok")
+	out, err := agent.RenderRatholeClient(boot, "tok", "127.0.0.1:5555")
 	require.NoError(t, err)
 	require.Contains(t, out, "[client]")
-	require.Contains(t, out, `remote_addr = "relay.test:20000"`)
+	require.Contains(t, out, `remote_addr = "127.0.0.1:5555"`)
 	require.NotContains(t, out, "[client.services.")
 }
 
-func TestRenderRatholeClientRejectsEmptyControlAddr(t *testing.T) {
-	_, err := agent.RenderRatholeClient(&quicktunv1.BootstrapResponse{}, "tok")
+func TestRenderRatholeClientRejectsEmptyRatholeRemoteAddr(t *testing.T) {
+	_, err := agent.RenderRatholeClient(&quicktunv1.BootstrapResponse{}, "tok", "")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "auth_proxy_endpoint")
+	require.Contains(t, err.Error(), "rathole_remote_addr")
 }
 
 func TestRenderRatholeClientRejectsEmptyToken(t *testing.T) {
 	_, err := agent.RenderRatholeClient(&quicktunv1.BootstrapResponse{
 		AuthProxyEndpoint: "relay.test:20000",
-	}, "")
+	}, "", "127.0.0.1:1234")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "token")
 }
 
 func TestRenderRatholeClientRejectsNilBoot(t *testing.T) {
-	_, err := agent.RenderRatholeClient(nil, "tok")
+	_, err := agent.RenderRatholeClient(nil, "tok", "127.0.0.1:1234")
 	require.Error(t, err)
 }
 
@@ -94,7 +95,7 @@ func TestRenderRatholeClientEscapesUntrustedFields(t *testing.T) {
 			{ServiceSlug: "evil", TargetAddr: `bad"addr`, TargetPort: 1234},
 		},
 	}
-	out, err := agent.RenderRatholeClient(boot, "tok")
+	out, err := agent.RenderRatholeClient(boot, "tok", "127.0.0.1:1234")
 	require.NoError(t, err)
 	// The literal quote must appear escaped (\") inside the TOML string.
 	require.Contains(t, out, `local_addr = "bad\"addr:1234"`)

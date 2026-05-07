@@ -58,6 +58,14 @@ type Runtime struct {
 	supCancel  context.CancelFunc
 	supDone    chan struct{}
 	curVersion string
+
+	// bridge is the in-process CONNECT proxy between rathole-client and the
+	// auth-proxy. Set once after the first successful Bootstrap (when the
+	// response advertises a non-empty AuthProxyEndpoint), then read by every
+	// applyBootstrap to fill rathole-client.toml's remote_addr field. Phase
+	// 1 does not retarget the bridge on rebootstrap; if the auth-proxy
+	// endpoint changes we log a warning and keep the original.
+	bridge *bridge
 }
 
 // New dials the control plane and constructs a Runtime ready to Run. The
@@ -121,6 +129,19 @@ func (r *Runtime) Run(ctx context.Context) error {
 	boot, err := r.bootstrapWithRetry(ctx)
 	if err != nil {
 		return err
+	}
+	// Start the in-process CONNECT bridge before applyBootstrap so the
+	// rendered rathole-client.toml can point remote_addr at it. If the
+	// server didn't advertise an auth-proxy endpoint (legacy/disabled),
+	// applyBootstrap falls through to the empty-string error path on
+	// purpose — Plan 8 requires the auth-proxy in the loop.
+	if endpoint := boot.GetAuthProxyEndpoint(); endpoint != "" && r.bridge == nil {
+		br, err := startBridge(ctx, endpoint, r.cfg.Token, r.lg)
+		if err != nil {
+			return fmt.Errorf("agent: start bridge: %w", err)
+		}
+		r.bridge = br
+		defer br.close()
 	}
 	if err := r.applyBootstrap(boot); err != nil {
 		return err
@@ -223,7 +244,20 @@ func (r *Runtime) heartbeat(ctx context.Context) (*quicktunv1.HeartbeatResponse,
 // applyBootstrap renders the rathole-client config, writes it to disk, and
 // (re)starts the supervisor unless we are in render-only mode.
 func (r *Runtime) applyBootstrap(boot *quicktunv1.BootstrapResponse) error {
-	toml, err := RenderRatholeClient(boot, r.cfg.Token)
+	// Prefer the bridge's local addr — that's the "rathole remote" rathole-
+	// client should dial. Fall back to the bootstrap's auth-proxy endpoint
+	// only when the bridge is absent (e.g. server returned empty). The
+	// renderer rejects empty, so this surfaces a clear error in that case.
+	remoteAddr := boot.GetAuthProxyEndpoint()
+	if r.bridge != nil {
+		if endpoint := boot.GetAuthProxyEndpoint(); endpoint != "" && endpoint != r.bridge.authProxyAddr {
+			r.lg.Warn("agent: auth_proxy_endpoint changed across bootstraps; keeping original bridge target",
+				zap.String("original", r.bridge.authProxyAddr),
+				zap.String("new", endpoint))
+		}
+		remoteAddr = r.bridge.localAddr()
+	}
+	toml, err := RenderRatholeClient(boot, r.cfg.Token, remoteAddr)
 	if err != nil {
 		return fmt.Errorf("agent: render: %w", err)
 	}

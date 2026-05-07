@@ -1,14 +1,18 @@
 package agent_test
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -60,7 +64,7 @@ func startAgentTestServer(t *testing.T, db *gorm.DB, relayHost string) string {
 		dao.NewServiceDAO(db),
 		zap.NewNop(),
 		relayHost,
-		"", // no auth-proxy; legacy fallback
+		"127.0.0.1:1", // dummy auth-proxy addr; bridge will listen but never accept
 	))
 
 	go func() { _ = srv.Serve(lis) }()
@@ -145,8 +149,9 @@ func TestRuntimeBootstrapAndRender(t *testing.T) {
 	out := string(body)
 
 	require.Contains(t, out, "[client]")
-	// Project's relay range starts at 20000 -> control port == 20000.
-	require.Contains(t, out, `remote_addr = "relay.test:20000"`)
+	// remote_addr should point at the agent's in-process CONNECT bridge —
+	// always 127.0.0.1:<random> — not directly at the auth-proxy endpoint.
+	require.Regexp(t, `remote_addr = "127\.0\.0\.1:\d+"`, out)
 
 	sum := sha256.Sum256([]byte(rawToken))
 	wantHex := hex.EncodeToString(sum[:])
@@ -326,4 +331,161 @@ func TestRuntimeRestartsSupervisorOnRebootstrap(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("runtime.Run did not return after ctx cancel")
 	}
+}
+
+// startFakeAuthProxy is a tiny in-test CONNECT echo server. It accepts any
+// CONNECT, echoes back 200 OK, then forwards subsequent bytes back to the
+// caller (bytes-out == bytes-in). Used by
+// TestRuntimeStartsBridgeWhenAuthProxyConfigured to prove the agent's
+// bridge actually forwards rathole-client traffic through to the
+// auth-proxy address advertised in BootstrapResponse.
+func startFakeAuthProxy(t *testing.T) (string, func()) {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	var wg sync.WaitGroup
+	go func() {
+		for {
+			conn, err := lis.Accept()
+			if err != nil {
+				return
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer conn.Close()
+				br := bufio.NewReader(conn)
+				req, err := http.ReadRequest(br)
+				if err != nil {
+					return
+				}
+				if req.Method != http.MethodConnect {
+					return
+				}
+				_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"))
+				_, _ = io.Copy(conn, conn)
+			}()
+		}
+	}()
+	cleanup := func() {
+		_ = lis.Close()
+		wg.Wait()
+	}
+	return lis.Addr().String(), cleanup
+}
+
+// TestRuntimeStartsBridgeWhenAuthProxyConfigured drives a runtime against a
+// stub gRPC server whose BootstrapResponse advertises a real fake auth-proxy
+// address, and asserts:
+//   - the rendered toml's remote_addr is 127.0.0.1:<random> (a bridge port,
+//     not the upstream auth-proxy directly);
+//   - dialing that bridge port and writing bytes round-trips through the
+//     fake auth-proxy and back, proving the CONNECT preamble + Bearer token
+//     handshake worked end-to-end.
+func TestRuntimeStartsBridgeWhenAuthProxyConfigured(t *testing.T) {
+	proxyAddr, stopProxy := startFakeAuthProxy(t)
+	defer stopProxy()
+
+	stub := &stubAgentServerWithEndpoint{endpoint: proxyAddr}
+	addr := startStubAgentServerCustom(t, stub)
+
+	stateDir := t.TempDir()
+	cfg := &agent.Config{
+		ControlEndpoint:  addr,
+		Token:            "any-token-stub-doesnt-validate",
+		StateDir:         stateDir,
+		RatholeBinary:    "", // render-only; bridge still starts
+		RatholeArgs:      []string{"--client"},
+		TLSInsecure:      true,
+		HostnameOverride: "test-bastion",
+	}
+
+	rt, err := agent.New(cfg, zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rt.Close() })
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- rt.Run(runCtx) }()
+
+	cfgPath := filepath.Join(stateDir, "rathole-client.toml")
+	require.Eventually(t, func() bool {
+		fi, err := os.Stat(cfgPath)
+		return err == nil && fi.Size() > 0
+	}, 5*time.Second, 50*time.Millisecond, "rathole-client.toml never appeared")
+
+	body, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	out := string(body)
+
+	// remote_addr is the bridge's local addr — extract and verify it's
+	// loopback, then dial it ourselves to prove forwarding works.
+	re := regexp.MustCompile(`remote_addr = "(127\.0\.0\.1:\d+)"`)
+	m := re.FindStringSubmatch(out)
+	require.Len(t, m, 2, "expected 127.0.0.1:<port> in remote_addr; got: %s", out)
+	bridgeAddr := m[1]
+
+	c, err := net.Dial("tcp", bridgeAddr)
+	require.NoError(t, err)
+
+	_, err = c.Write([]byte("hello"))
+	require.NoError(t, err)
+	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 5)
+	n, err := io.ReadFull(c, buf)
+	require.NoError(t, err)
+	require.Equal(t, "hello", string(buf[:n]))
+
+	// Close the test client BEFORE cancel: the bridge's close() waits for
+	// in-flight handlers (io.Copy goroutines) to drain — they only return
+	// when the local conn closes.
+	_ = c.Close()
+
+	cancel()
+	select {
+	case err := <-runErr:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("runtime.Run did not return after ctx cancel")
+	}
+}
+
+// stubAgentServerWithEndpoint is a stub Bootstrap server whose response
+// carries a configurable AuthProxyEndpoint. Distinct from stubAgentServer
+// (which hardcodes "relay.test:20000") so the bridge test can plug in the
+// fake-proxy listen addr.
+type stubAgentServerWithEndpoint struct {
+	quicktunv1.UnimplementedAgentServiceServer
+	endpoint string
+}
+
+func (s *stubAgentServerWithEndpoint) Bootstrap(_ context.Context, _ *quicktunv1.BootstrapRequest) (*quicktunv1.BootstrapResponse, error) {
+	return &quicktunv1.BootstrapResponse{
+		SiteName:          "proj/bastion-1",
+		ProjectSlug:       "proj",
+		SiteSlug:          "bastion-1",
+		AuthProxyEndpoint: s.endpoint,
+		Tunnels: []*quicktunv1.TunnelBinding{
+			{ServiceSlug: "ssh", TargetAddr: "127.0.0.1", TargetPort: 22, Proto: "tcp", RelayPort: 20001},
+		},
+		HeartbeatSeconds: 60, // slow — we don't exercise it in this test
+		ConfigVersion:    "v0",
+	}, nil
+}
+
+func (s *stubAgentServerWithEndpoint) Heartbeat(_ context.Context, _ *quicktunv1.HeartbeatRequest) (*quicktunv1.HeartbeatResponse, error) {
+	return &quicktunv1.HeartbeatResponse{ServerTime: timestamppb.Now()}, nil
+}
+
+// startStubAgentServerCustom is the AgentService stub host generic over the
+// concrete server impl, used to mount stubAgentServerWithEndpoint.
+func startStubAgentServerCustom(t *testing.T, srvImpl quicktunv1.AgentServiceServer) string {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv := grpc.NewServer()
+	quicktunv1.RegisterAgentServiceServer(srv, srvImpl)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	return lis.Addr().String()
 }
