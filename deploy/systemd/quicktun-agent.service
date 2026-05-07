@@ -1,0 +1,23 @@
+[Unit]
+Description=quicktun site agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=quicktun-agent
+Group=quicktun-agent
+ExecStart=/usr/local/bin/quicktun-agent run --config /etc/quicktun/agent.yaml
+Restart=on-failure
+RestartSec=5s
+StartLimitBurst=10
+StartLimitIntervalSec=60s
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/quicktun-agent /var/log/quicktun-agent
+
+[Install]
+WantedBy=multi-user.target

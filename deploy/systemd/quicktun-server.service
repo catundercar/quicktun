@@ -1,0 +1,28 @@
+[Unit]
+Description=quicktun control plane
+After=network-online.target
+Wants=network-online.target
+Documentation=https://github.com/tulip/quicktun
+
+[Service]
+Type=simple
+User=quicktun
+Group=quicktun
+ExecStartPre=/usr/local/bin/quicktun-server migrate --config /etc/quicktun/server.yaml
+ExecStart=/usr/local/bin/quicktun-server serve --config /etc/quicktun/server.yaml
+Restart=on-failure
+RestartSec=5s
+StartLimitBurst=10
+StartLimitIntervalSec=60s
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/quicktun /var/log/quicktun
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

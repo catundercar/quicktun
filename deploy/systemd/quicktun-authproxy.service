@@ -1,0 +1,27 @@
+[Unit]
+Description=quicktun auth-proxy
+After=network-online.target quicktun-server.service
+Wants=network-online.target
+Requires=quicktun-server.service
+
+[Service]
+Type=simple
+User=quicktun
+Group=quicktun
+ExecStart=/usr/local/bin/quicktun-authproxy run --config /etc/quicktun/authproxy.yaml
+Restart=on-failure
+RestartSec=5s
+StartLimitBurst=10
+StartLimitIntervalSec=60s
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/var/lib/quicktun
+ReadWritePaths=/var/log/quicktun
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
