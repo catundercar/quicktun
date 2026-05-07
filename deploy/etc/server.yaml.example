@@ -1,0 +1,44 @@
+# /etc/quicktun/server.yaml — quicktun control plane config
+# Replace CONTROL_DOMAIN, RELAY_DOMAIN, and ADMIN_EMAIL with your values.
+# See internal/config/config.go for the full schema.
+
+control_plane:
+  # gRPC listener (operator CLI + agents). Bind to localhost; let nginx
+  # terminate TLS on :443 and proxy with grpc_pass.
+  grpc_listen: 127.0.0.1:9090
+  # grpc-gateway HTTP/JSON listener (REST mirror of gRPC). Same idea —
+  # nginx fronts it on api.CONTROL_DOMAIN.
+  http_listen: 127.0.0.1:9091
+  # Public address agents reach for the relay. Used when rendering
+  # rathole-server config and BootstrapResponse.AuthProxyEndpoint.
+  relay_addr: RELAY_DOMAIN
+
+database:
+  driver: sqlite
+  dsn: /var/lib/quicktun/quicktun.db?_foreign_keys=on
+
+session:
+  # Default lifetime of operator login bearer tokens.
+  default_ttl: 24h
+
+log:
+  level: info
+  # Empty path → stderr (which systemd captures into journald). Set to
+  # /var/log/quicktun/server.log if you prefer file-based with lumberjack
+  # rotation.
+  path: ""
+  max_size_mb: 100
+  max_age_days: 30
+  max_backups: 7
+
+backend:
+  # Path to the rathole binary. Operator installs separately.
+  rathole_binary: /usr/local/bin/rathole
+  # Args appended after the rendered config path. rathole's "server"
+  # mode runs the receiving end of the tunnel.
+  rathole_args: ["--server"]
+  # Where the supervisor renders per-project rathole-server.toml files.
+  rathole_config_dir: /var/lib/quicktun/relays
+  # If set, agents bridge through this address (auth-proxy front door)
+  # instead of dialing rathole directly. Match nginx stream listener.
+  auth_proxy_public_addr: RELAY_DOMAIN:443

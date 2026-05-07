@@ -1,0 +1,14 @@
+# /etc/quicktun/authproxy.yaml — quicktun auth-proxy config
+# See internal/authproxy/config.go for the full schema.
+
+# Auth-proxy listens plain TCP on localhost; nginx stream block terminates
+# :443 TLS for RELAY_DOMAIN and proxies to this address.
+listen_addr: 127.0.0.1:8443
+
+database:
+  # The auth-proxy opens the control plane's SQLite DB read-only for
+  # token validation + project/site lookup.
+  dsn: /var/lib/quicktun/quicktun.db?_foreign_keys=on&mode=ro
+
+log:
+  level: info

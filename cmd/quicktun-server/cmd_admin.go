@@ -16,6 +16,7 @@ func adminCmd() *cobra.Command {
 		Short: "Administrative commands",
 	}
 	c.AddCommand(adminCreateOperatorCmd())
+	c.AddCommand(adminListOperatorsCmd())
 	c.AddCommand(adminProjectCmd())
 	c.AddCommand(adminSiteCmd())
 	c.AddCommand(adminServiceCmd())
