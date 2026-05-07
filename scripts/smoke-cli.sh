@@ -110,17 +110,6 @@ SVC_RESP=$(curl -sS -X POST "${HTTP_BASE}/v1/projects/cli-test/sites/bastion/ser
 RELAY_PORT=$(echo "$SVC_RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin)["relayPort"])')
 [ -n "$RELAY_PORT" ] || { echo "FAIL: capture relay_port: $SVC_RESP" >&2; exit 1; }
 
-# Grant the admin operator explicit access to cli-test. The control plane
-# RPCs honor IsAdmin and bypass the join table, but the auth-proxy router
-# (internal/authproxy/router.go) requires an explicit operator_project_access
-# row for operator-session CONNECTs — so seed one directly. There is no
-# operator-grant API/CLI yet (Phase >1), and the alternative would be to
-# reach into Go code from bash; a single SQL insert is the smallest hack.
-sqlite3 "$WORKDIR/quicktun.db" \
-    "INSERT INTO operator_project_access (operator_id, project_id, role, created_at, updated_at)
-     SELECT o.id, p.id, 'operator', datetime('now'), datetime('now')
-     FROM operators o, projects p
-     WHERE o.email='admin@x.com' AND p.slug='cli-test';"
 echo "seed projects: PASS (relay_port=$RELAY_PORT)"
 
 # 4. Stand up the fake service backend on RELAY_PORT.

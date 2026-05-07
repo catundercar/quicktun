@@ -63,8 +63,8 @@ func (r *Router) Route(ctx context.Context, rawToken, target string) (string, er
 	}
 
 	// Fall back to operator session path.
-	if opID, err := dao.NewSessionDAO(r.db).ValidateSessionRaw(ctx, rawToken); err == nil {
-		return r.routeOperator(ctx, opID, target)
+	if opID, isAdmin, err := dao.NewSessionDAO(r.db).ValidateSessionRaw(ctx, rawToken); err == nil {
+		return r.routeOperator(ctx, opID, isAdmin, target)
 	}
 
 	return "", ErrUnauthenticated
@@ -98,7 +98,10 @@ func (r *Router) routeSiteAgent(ctx context.Context, siteID uint64) (string, err
 // <port> is allocated to a service in a project the operator has access to.
 // Anything else → ErrUnauthenticated (no SSRF surface; the operator cannot
 // make auth-proxy dial arbitrary internal hosts).
-func (r *Router) routeOperator(ctx context.Context, operatorID uint64, target string) (string, error) {
+//
+// Admin operators bypass the operator_project_access check — consistent with
+// how the gRPC control-plane handles IsAdmin.
+func (r *Router) routeOperator(ctx context.Context, operatorID uint64, isAdmin bool, target string) (string, error) {
 	host, portStr, err := net.SplitHostPort(target)
 	if err != nil {
 		return "", ErrUnauthenticated
@@ -132,11 +135,15 @@ func (r *Router) routeOperator(ctx context.Context, operatorID uint64, target st
 		return "", ErrUnauthenticated
 	}
 
-	var access model.OperatorProjectAccess
-	if err := r.db.WithContext(ctx).
-		Where("operator_id = ? AND project_id = ?", operatorID, project.ID).
-		First(&access).Error; err != nil {
-		return "", ErrUnauthenticated
+	// Admin operators implicitly have access to all projects; skip the
+	// join-table check. Non-admins must have an explicit access row.
+	if !isAdmin {
+		var access model.OperatorProjectAccess
+		if err := r.db.WithContext(ctx).
+			Where("operator_id = ? AND project_id = ?", operatorID, project.ID).
+			First(&access).Error; err != nil {
+			return "", ErrUnauthenticated
+		}
 	}
 
 	return target, nil

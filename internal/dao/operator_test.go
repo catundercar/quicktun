@@ -106,16 +106,17 @@ func TestValidateSessionRaw(t *testing.T) {
 	_, raw, err := sess.Issue(ctx, op.ID, time.Hour, "ua", "ip")
 	require.NoError(t, err)
 
-	gotID, err := sess.ValidateSessionRaw(ctx, raw)
+	gotID, gotIsAdmin, err := sess.ValidateSessionRaw(ctx, raw)
 	require.NoError(t, err)
 	require.Equal(t, op.ID, gotID)
+	require.False(t, gotIsAdmin)
 }
 
 func TestValidateSessionRawRejectsInvalid(t *testing.T) {
 	db := openWithModels(t)
 	sess := dao.NewSessionDAO(db)
 
-	_, err := sess.ValidateSessionRaw(context.Background(), "not-a-real-token")
+	_, _, err := sess.ValidateSessionRaw(context.Background(), "not-a-real-token")
 	require.Error(t, err)
 	require.True(t, errors.Is(err, gorm.ErrRecordNotFound),
 		"expected wrapped ErrRecordNotFound, got: %v", err)
@@ -138,7 +139,7 @@ func TestValidateSessionRawRejectsExpired(t *testing.T) {
 		Where("operator_id = ?", op.ID).
 		Update("expires_at", past).Error)
 
-	_, err = sess.ValidateSessionRaw(ctx, raw)
+	_, _, err = sess.ValidateSessionRaw(ctx, raw)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, gorm.ErrRecordNotFound),
 		"expected wrapped ErrRecordNotFound, got: %v", err)
@@ -156,7 +157,7 @@ func TestValidateSessionRawRejectsRevoked(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sess.Revoke(ctx, rec.ID))
 
-	_, err = sess.ValidateSessionRaw(ctx, raw)
+	_, _, err = sess.ValidateSessionRaw(ctx, raw)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, gorm.ErrRecordNotFound),
 		"expected wrapped ErrRecordNotFound, got: %v", err)

@@ -102,25 +102,35 @@ func (d *SessionDAO) Validate(ctx context.Context, rawToken string) (*model.Oper
 
 // ValidateSessionRaw hashes raw and looks up an operator_session row whose
 // token_hash matches, has not been revoked, and whose expires_at is in the
-// future. Returns the owning operator's ID, or gorm.ErrRecordNotFound (wrapped)
-// if no such session exists.
+// future. Returns the owning operator's ID and IsAdmin flag, or
+// gorm.ErrRecordNotFound (wrapped) if no such session exists.
 //
 // Mirrors SiteAgentTokenDAO.ValidateRaw. Used by the auth-proxy's operator
 // session path; the gRPC interceptor uses Validate (which also returns the
 // Operator row) instead.
-func (d *SessionDAO) ValidateSessionRaw(ctx context.Context, raw string) (uint64, error) {
+func (d *SessionDAO) ValidateSessionRaw(ctx context.Context, raw string) (uint64, bool, error) {
 	hash := auth.HashToken(raw)
-	var sess model.OperatorSession
+
+	// Single query: join operator_sessions → operators so we get is_admin
+	// without a second round-trip.
+	type result struct {
+		OperatorID uint64
+		IsAdmin    bool
+	}
+	var row result
 	err := d.db.WithContext(ctx).
-		Where("token_hash = ? AND revoked_at IS NULL AND expires_at > ?", hash, time.Now().UTC()).
-		First(&sess).Error
+		Model(&model.OperatorSession{}).
+		Select("operator_sessions.operator_id, operators.is_admin").
+		Joins("JOIN operators ON operators.id = operator_sessions.operator_id AND operators.deleted_at IS NULL").
+		Where("operator_sessions.token_hash = ? AND operator_sessions.revoked_at IS NULL AND operator_sessions.expires_at > ?", hash, time.Now().UTC()).
+		First(&row).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return 0, fmt.Errorf("dao: session: invalid or expired token: %w", err)
+			return 0, false, fmt.Errorf("dao: session: invalid or expired token: %w", err)
 		}
-		return 0, fmt.Errorf("dao: session lookup: %w", err)
+		return 0, false, fmt.Errorf("dao: session lookup: %w", err)
 	}
-	return sess.OperatorID, nil
+	return row.OperatorID, row.IsAdmin, nil
 }
 
 // Revoke marks the session as revoked. Idempotent.

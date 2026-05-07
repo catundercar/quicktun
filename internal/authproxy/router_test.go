@@ -246,6 +246,42 @@ func TestRouterOperatorTokenRejectsDisabledProject(t *testing.T) {
 	require.ErrorIs(t, err, authproxy.ErrUnauthenticated)
 }
 
+// TestRouterOperatorAdminBypassesAccessCheck verifies that an admin operator
+// can CONNECT to a service port WITHOUT an operator_project_access row.
+func TestRouterOperatorAdminBypassesAccessCheck(t *testing.T) {
+	db := openRouterTestDB(t)
+	ctx := context.Background()
+
+	// Build project → site → service (same pattern as seedOperatorService).
+	p, err := dao.NewProjectDAO(db).Create(ctx, &model.Project{
+		Slug: "admin-proj", Name: "admin-proj", RelayPortRange: "21000-21099",
+	})
+	require.NoError(t, err)
+	s, err := dao.NewSiteDAO(db).Create(ctx, &model.Site{
+		ProjectID: p.ID, Name: "admin-site",
+	})
+	require.NoError(t, err)
+	relayPort := uint16(21042)
+	require.NoError(t, db.Create(&model.Service{
+		SiteID: s.ID, Name: "ssh",
+		TargetAddr: "127.0.0.1", TargetPort: 22, Proto: model.ProtoTCP,
+		RelayPort: &relayPort,
+	}).Error)
+
+	// Create an ADMIN operator + session. Do NOT create an
+	// operator_project_access row — that is the whole point of this test.
+	adminOp, err := dao.NewOperatorDAO(db).Create(ctx, "admin@example.com", "h", true)
+	require.NoError(t, err)
+	_, raw, err := dao.NewSessionDAO(db).Issue(ctx, adminOp.ID, time.Hour, "ua", "ip")
+	require.NoError(t, err)
+
+	r := authproxy.NewRouter(db)
+	target := "127.0.0.1:" + strconv.Itoa(int(relayPort))
+	addr, err := r.Route(ctx, raw, target)
+	require.NoError(t, err, "admin operator must bypass access-check without an operator_project_access row")
+	require.Equal(t, target, addr)
+}
+
 func TestRouterOperatorTokenRejectsExpiredSession(t *testing.T) {
 	db := openRouterTestDB(t)
 	op, raw, relayPort := seedOperatorService(t, db, true)
