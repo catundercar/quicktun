@@ -71,6 +71,8 @@ backend:
   rathole_binary: ""
   rathole_config_dir: ${WORKDIR}/relays
   auth_proxy_public_addr: 127.0.0.1:${AUTHPROXY_PORT}
+  sweeper_interval: 2s
+  site_offline_after: 1s
 EOF
 
 make build > /dev/null
@@ -227,4 +229,33 @@ else
     exit 1
 fi
 
-echo "PASS: end-to-end CLI login + list + forward"
+# 9. Server /healthz.
+HEALTH=$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:$HTTP_PORT/healthz")
+[[ "$HEALTH" == "200" ]] || { echo "FAIL: server /healthz got $HEALTH"; exit 1; }
+echo "server /healthz: PASS"
+
+# 10. quicktun status --json.
+STATUS_JSON=$(./bin/quicktun status --json --config "$CRED_FILE")
+ACTIVE=$(echo "$STATUS_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["project_count_active"])')
+[[ "$ACTIVE" -ge 1 ]] || { echo "FAIL: status active count $ACTIVE"; echo "$STATUS_JSON" >&2; exit 1; }
+
+OPCOUNT=$(echo "$STATUS_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["operator_count"])')
+[[ "$OPCOUNT" -ge 1 ]] || { echo "FAIL: status operator count $OPCOUNT"; exit 1; }
+echo "quicktun status: PASS"
+
+# 11. Sweeper: backdate a site's last_seen_at; wait for sweeper; expect offline.
+sqlite3 "$WORKDIR/quicktun.db" \
+    "UPDATE sites SET status='online', last_seen_at=datetime('now', '-30 seconds') WHERE name='bastion';"
+
+# Wait up to ~6s for the sweeper to flip it.
+for i in $(seq 1 12); do
+    SITE_STATUS=$(sqlite3 "$WORKDIR/quicktun.db" \
+        "SELECT status FROM sites WHERE name='bastion';")
+    [[ "$SITE_STATUS" == "offline" ]] && break
+    sleep 0.5
+done
+[[ "$SITE_STATUS" == "offline" ]] || \
+    { echo "FAIL: sweeper didn't flip site (still $SITE_STATUS)"; exit 1; }
+echo "sweeper: PASS"
+
+echo "PASS: end-to-end CLI login + list + forward + /healthz + status + sweeper"
