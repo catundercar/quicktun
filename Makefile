@@ -5,10 +5,11 @@ BINDIR        := bin
 SERVER_BIN    := $(BINDIR)/quicktun-server
 AGENT_BIN     := $(BINDIR)/quicktun-agent
 AUTHPROXY_BIN := $(BINDIR)/quicktun-authproxy
+CLI_BIN       := $(BINDIR)/quicktun
 
 all: build
 
-build: $(SERVER_BIN) $(AGENT_BIN) $(AUTHPROXY_BIN)
+build: $(SERVER_BIN) $(AGENT_BIN) $(AUTHPROXY_BIN) $(CLI_BIN)
 
 $(SERVER_BIN): sync-migrations
 	@mkdir -p $(BINDIR)
@@ -21,6 +22,10 @@ $(AGENT_BIN):
 $(AUTHPROXY_BIN):
 	@mkdir -p $(BINDIR)
 	$(GO) build -o $@ ./cmd/quicktun-authproxy
+
+$(CLI_BIN):
+	@mkdir -p $(BINDIR)
+	$(GO) build -o $@ ./cmd/quicktun
 
 test:
 	$(GO) test ./...
