@@ -1,0 +1,26 @@
+{
+  "version.label": {
+    "message": "Next",
+    "description": "The label for version current"
+  },
+  "sidebar.docs.category.快速开始": {
+    "message": "Getting Started",
+    "description": "The label for category '快速开始' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.架构": {
+    "message": "Architecture",
+    "description": "The label for category '架构' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.部署": {
+    "message": "Deployment",
+    "description": "The label for category '部署' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.操作员 CLI": {
+    "message": "Operator CLI",
+    "description": "The label for category '操作员 CLI' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.配置参考": {
+    "message": "Config Reference",
+    "description": "The label for category '配置参考' in sidebar 'docs'"
+  }
+}
