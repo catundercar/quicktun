@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 
+	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -53,3 +54,31 @@ func (b bearerCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[str
 }
 
 func (b bearerCreds) RequireTransportSecurity() bool { return !b.insecure }
+
+// loadAndDial reads creds from --config (or default path), dials gRPC,
+// and returns both. Caller MUST defer conn.Close(). The returned
+// *clicred.Credentials lets caller-side code that wants the operator's
+// email or auth-proxy endpoint avoid a second Load.
+//
+// On a missing credentials file we wrap the error with a hint so the
+// operator knows to run `quicktun login` rather than chasing a generic
+// "no such file" message.
+func loadAndDial(cmd *cobra.Command) (*clicred.Credentials, *grpc.ClientConn, error) {
+	path, _ := cmd.Root().PersistentFlags().GetString("config")
+	if path == "" {
+		var err error
+		path, err = clicred.DefaultPath()
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	creds, err := clicred.Load(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load credentials: %w (run `quicktun login` first)", err)
+	}
+	conn, err := dialControl(creds)
+	if err != nil {
+		return nil, nil, err
+	}
+	return creds, conn, nil
+}
