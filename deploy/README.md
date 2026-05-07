@@ -194,6 +194,79 @@ Confirm from the operator side:
 quicktun site get my-team/bastion-1   # last_seen_time should be recent
 ```
 
+## 8a. macOS agent installation
+
+The same `install-agent.sh` detects the OS automatically (`uname -s`). On
+macOS it installs a **LaunchDaemon** instead of a systemd service.
+
+**Phase 1 trade-off: the daemon runs as `root`.** A proper unprivileged
+`_quicktun-agent` system user via `dscl` is deferred to Phase 2. The agent's
+filesystem footprint is small and the token file is `chmod 0600`, so this is
+acceptable for early adopters.
+
+### Steps
+
+1. Build the agent binary on macOS:
+
+   ```bash
+   git clone https://github.com/tulip/quicktun.git && cd quicktun
+   make build
+   ```
+
+2. Install rathole (macOS static binary from the upstream release page):
+
+   ```bash
+   RATHOLE_VERSION=v0.5.0
+   curl -L "https://github.com/rapiz1/rathole/releases/download/${RATHOLE_VERSION}/rathole-aarch64-apple-darwin.zip" \
+       -o /tmp/rathole.zip
+   unzip /tmp/rathole.zip -d /tmp/rathole && \
+       sudo install -m 0755 /tmp/rathole/rathole /usr/local/bin/rathole
+   ```
+
+   (Use `x86_64-apple-darwin` if on Intel.)
+
+3. Run the installer:
+
+   ```bash
+   sudo ./deploy/install-agent.sh \
+       --token <PASTE_RAW_TOKEN> \
+       --control-endpoint control.example.com:443 \
+       --auth-proxy relay.example.com:443
+   ```
+
+   The script:
+   - Creates `/etc/quicktun`, `/var/lib/quicktun-agent`, `/var/log/quicktun-agent`.
+   - Copies `quicktun-agent` to `/usr/local/bin/`.
+   - Drops `com.tulip.quicktun-agent.plist` into `/Library/LaunchDaemons/`.
+   - Renders `/etc/quicktun/agent.yaml` (mode `0600`).
+   - Calls `launchctl load -w` to enable + start the daemon immediately.
+
+4. Verify the daemon is running:
+
+   ```bash
+   sudo launchctl list | grep quicktun-agent
+   tail -f /var/log/quicktun-agent/agent.log
+   ```
+
+   A `PID` column in the `launchctl list` output confirms the process is up.
+
+5. Stop the agent:
+
+   ```bash
+   sudo launchctl unload /Library/LaunchDaemons/com.tulip.quicktun-agent.plist
+   ```
+
+   To prevent reloading on next boot, pass `-w` (writes the Disabled key):
+
+   ```bash
+   sudo launchctl unload -w /Library/LaunchDaemons/com.tulip.quicktun-agent.plist
+   ```
+
+6. Upgrade: re-run `install-agent.sh` with the same flags. The script
+   unloads the old daemon, replaces the binary and plist, then reloads.
+
+---
+
 ## 9. Verify the forward
 
 From your workstation:
