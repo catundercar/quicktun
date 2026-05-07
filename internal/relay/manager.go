@@ -7,13 +7,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync"
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"github.com/tulip/quicktun/internal/dao"
+	"github.com/tulip/quicktun/internal/metrics"
 	"github.com/tulip/quicktun/internal/model"
+	"github.com/tulip/quicktun/internal/notify"
 	"github.com/tulip/quicktun/internal/supervisor"
 )
 
@@ -56,6 +59,12 @@ type Manager struct {
 	cfg ManagerConfig
 	lg  *zap.Logger
 
+	// metrics + crashloop are optional observers wired by the control plane.
+	// Both are nil-safe: relay.Manager touches them only via methods that
+	// short-circuit on a nil receiver.
+	metrics   *metrics.ServerMetrics
+	crashloop *notify.CrashLoop
+
 	mu      sync.Mutex
 	rootCtx context.Context
 	sups    map[uint64]*projectSup
@@ -65,7 +74,11 @@ type Manager struct {
 }
 
 // NewManager constructs a Manager. The caller must call Start before using it.
-func NewManager(db *gorm.DB, cfg ManagerConfig, lg *zap.Logger) *Manager {
+// `m` and `cl` are optional — pass nil to disable Prometheus instrumentation
+// and/or crash-loop alerting. Both observers are wired into the supervisor's
+// OnExit hook so each child exit increments restart counters and (if the
+// rolling threshold is hit) triggers the configured webhook.
+func NewManager(db *gorm.DB, cfg ManagerConfig, lg *zap.Logger, m *metrics.ServerMetrics, cl *notify.CrashLoop) *Manager {
 	if lg == nil {
 		lg = zap.NewNop()
 	}
@@ -73,10 +86,12 @@ func NewManager(db *gorm.DB, cfg ManagerConfig, lg *zap.Logger) *Manager {
 		cfg.ConfigDir = "/tmp/quicktun-relay"
 	}
 	return &Manager{
-		db:   db,
-		cfg:  cfg,
-		lg:   lg,
-		sups: map[uint64]*projectSup{},
+		db:        db,
+		cfg:       cfg,
+		lg:        lg,
+		metrics:   m,
+		crashloop: cl,
+		sups:      map[uint64]*projectSup{},
 	}
 }
 
@@ -170,6 +185,8 @@ func (m *Manager) spawn(ctx context.Context, projectID uint64, rootCtx context.C
 		rootCtx = context.Background()
 	}
 
+	pidLabel := strconv.FormatUint(projectID, 10)
+
 	sup := supervisor.New(supervisor.Spec{
 		Name:   fmt.Sprintf("rathole-project-%d", projectID),
 		Binary: m.cfg.Binary,
@@ -179,6 +196,19 @@ func (m *Manager) spawn(ctx context.Context, projectID uint64, rootCtx context.C
 				zap.Uint64("project_id", projectID),
 				zap.String("source", src),
 				zap.String("line", line))
+		},
+		// OnExit fires once per process exit — both the natural-crash path
+		// and the ctx-cancel teardown path. Bumping restart counters in
+		// both is the right shape for the metric (it counts every "child
+		// is no longer running" event); the alive gauge is set per the
+		// supervisor.Spec contract documented in supervisor.go.
+		OnStart: func() {
+			m.metrics.SetSupervisorAlive(pidLabel, true)
+		},
+		OnExit: func(_ error) {
+			m.metrics.IncSupervisorRestarts(pidLabel)
+			m.metrics.SetSupervisorAlive(pidLabel, false)
+			m.crashloop.Record(pidLabel)
 		},
 	}, m.lg)
 
@@ -225,6 +255,9 @@ func (m *Manager) RemoveProject(ctx context.Context, projectID uint64) error {
 	if ok {
 		ps.cancel()
 	}
+	// Drop the per-project label series so retired projects don't leak
+	// cardinality. Idempotent on absent labels.
+	m.metrics.DeleteSupervisor(strconv.FormatUint(projectID, 10))
 	return nil
 }
 

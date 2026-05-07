@@ -20,6 +20,13 @@ type Config struct {
 	// network — operators who need external probing should override.
 	HealthListenAddr string `yaml:"health_listen_addr"`
 
+	// MetricsListenAddr is the bind address for the /metrics HTTP endpoint.
+	// Empty (default) disables it. Loopback recommended (e.g.
+	// "127.0.0.1:8445") so Prometheus scrapes don't traverse the public
+	// network. Kept off-by-default to avoid binding a port on hosts where
+	// the operator hasn't opted into metrics scraping yet.
+	MetricsListenAddr string `yaml:"metrics_listen_addr"`
+
 	// Database holds the path to the control plane's SQLite file. The
 	// auth-proxy reads (token validation, project lookup) without writing.
 	// Required.

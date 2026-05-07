@@ -31,7 +31,8 @@ type Config struct {
 	Backend      BackendConfig      `mapstructure:"backend"`
 }
 
-// BackendConfig configures the relay backend (Phase 1: rathole).
+// BackendConfig configures the relay backend (Phase 1: rathole) plus the
+// observability surface (metrics endpoint, webhook alerts).
 type BackendConfig struct {
 	RatholeBinary       string        `mapstructure:"rathole_binary"`
 	RatholeArgs         []string      `mapstructure:"rathole_args"`
@@ -39,6 +40,18 @@ type BackendConfig struct {
 	AuthProxyPublicAddr string        `mapstructure:"auth_proxy_public_addr"` // empty → legacy direct-rathole fallback
 	SweeperInterval     time.Duration `mapstructure:"sweeper_interval"`       // 0 disables the sweeper
 	SiteOfflineAfter    time.Duration `mapstructure:"site_offline_after"`     // 0 disables the sweeper
+
+	// MetricsListenAddr, when set, opens a dedicated /metrics listener
+	// in addition to the gateway-mounted endpoint. Loopback default
+	// keeps Prometheus scrape traffic off the public interface.
+	MetricsListenAddr string `mapstructure:"metrics_listen_addr"`
+
+	// WebhookURL receives JSON event POSTs (currently: supervisor crash
+	// loops). Empty disables alerting.
+	WebhookURL         string        `mapstructure:"webhook_url"`
+	WebhookTimeout     time.Duration `mapstructure:"webhook_timeout"`
+	CrashLoopThreshold int           `mapstructure:"crash_loop_threshold"`
+	CrashLoopWindow    time.Duration `mapstructure:"crash_loop_window"`
 }
 
 // ControlPlaneConfig holds gRPC + grpc-gateway listener settings.
@@ -129,4 +142,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("backend.rathole_config_dir", "/var/lib/quicktun/relays")
 	v.SetDefault("backend.sweeper_interval", "30s")
 	v.SetDefault("backend.site_offline_after", "90s")
+	v.SetDefault("backend.metrics_listen_addr", "")
+	v.SetDefault("backend.webhook_url", "")
+	v.SetDefault("backend.webhook_timeout", "5s")
+	v.SetDefault("backend.crash_loop_threshold", 5)
+	v.SetDefault("backend.crash_loop_window", "5m")
 }

@@ -10,5 +10,9 @@ database:
   # token validation + project/site lookup.
   dsn: /var/lib/quicktun/quicktun.db?_foreign_keys=on&mode=ro
 
+# Optional /metrics listener for Prometheus. Loopback recommended so the
+# scrape stays on localhost. Empty string disables it.
+metrics_listen_addr: ""
+
 log:
   level: info

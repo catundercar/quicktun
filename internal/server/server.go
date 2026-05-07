@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -30,6 +31,8 @@ import (
 	"github.com/tulip/quicktun/internal/dao"
 	"github.com/tulip/quicktun/internal/grpcsvc"
 	"github.com/tulip/quicktun/internal/health"
+	"github.com/tulip/quicktun/internal/metrics"
+	"github.com/tulip/quicktun/internal/notify"
 	"github.com/tulip/quicktun/internal/relay"
 	"github.com/tulip/quicktun/internal/server/webui"
 	"github.com/tulip/quicktun/internal/sweeper"
@@ -49,6 +52,19 @@ type Config struct {
 	SessionTTL          time.Duration
 	SweeperInterval     time.Duration
 	SiteOfflineAfter    time.Duration
+
+	// MetricsListenAddr, when non-empty, mounts /metrics on a dedicated
+	// listener so Prometheus can scrape without traversing the gateway
+	// HTTP listener. When empty, /metrics is still mounted on the gateway
+	// listener (so a single nginx upstream can scrape it).
+	MetricsListenAddr string
+
+	// WebhookURL receives JSON event POSTs (currently: supervisor crash
+	// loops). Empty disables alerting.
+	WebhookURL         string
+	WebhookTimeout     time.Duration
+	CrashLoopThreshold int
+	CrashLoopWindow    time.Duration
 }
 
 // Server runs the gRPC server and grpc-gateway HTTP server side-by-side.
@@ -57,6 +73,13 @@ type Server struct {
 	grpcServer *grpc.Server
 	httpServer *http.Server
 	relay      *relay.Manager
+
+	// metricsRegistry is the per-process registry used for /metrics. Stored
+	// on the Server so Run can wire it into both the gateway mux and (when
+	// MetricsListenAddr is set) a separate listener.
+	metricsRegistry  *prometheus.Registry
+	metricsCollected *metrics.ServerMetrics
+	metricsServer    *http.Server // populated only when MetricsListenAddr != ""
 }
 
 // New builds a Server but does not yet bind any listeners.
@@ -71,20 +94,42 @@ func New(cfg Config) (*Server, error) {
 		cfg.SessionTTL = 8 * time.Hour
 	}
 
+	// Build the Prometheus registry + control-plane metrics up-front so
+	// every downstream component (interceptor, relay manager, sweeper) can
+	// observe the same collector instances.
+	reg := metrics.NewRegistry()
+	serverMetrics := metrics.NewServer(reg)
+
+	// Webhook notifier + crash-loop detector. Both are wired into the
+	// supervisor's OnExit hook by relay.Manager. Empty WebhookURL = noop.
+	webhookTimeout := cfg.WebhookTimeout
+	if webhookTimeout <= 0 {
+		webhookTimeout = 5 * time.Second
+	}
+	notifier := notify.New(cfg.WebhookURL, webhookTimeout, cfg.Logger)
+	crashLoopWindow := cfg.CrashLoopWindow
+	if crashLoopWindow <= 0 {
+		crashLoopWindow = 5 * time.Minute
+	}
+	crashLoop := notify.NewCrashLoop(cfg.CrashLoopThreshold, crashLoopWindow, notifier, cfg.Logger)
+
 	ops := dao.NewOperatorDAO(cfg.DB)
 	sessions := dao.NewSessionDAO(cfg.DB)
 	authSvc := grpcsvc.NewAuthService(ops, sessions, cfg.SessionTTL)
 
+	metricsIntc := auth.MetricsInterceptor(serverMetrics)
 	intc := auth.NewUnaryInterceptor(sessions, "/quicktun.v1.AuthService/Login")
 	agentIntc := auth.AgentInterceptor(cfg.DB, cfg.Logger)
-	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(sourceIPInterceptor, intc, agentIntc))
+	// Order matters: metricsIntc must wrap the others so it observes the
+	// final status code (including 401 from intc / agentIntc).
+	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(metricsIntc, sourceIPInterceptor, intc, agentIntc))
 	quicktunv1.RegisterAuthServiceServer(gs, authSvc)
 
 	mgr := relay.NewManager(cfg.DB, relay.ManagerConfig{
 		Binary:     cfg.RatholeBinary,
 		BinaryArgs: cfg.RatholeArgs,
 		ConfigDir:  cfg.RatholeConfigDir,
-	}, cfg.Logger)
+	}, cfg.Logger, serverMetrics, crashLoop)
 
 	auditWriter := audit.NewWriter(cfg.DB)
 	projectSvc := grpcsvc.NewProjectService(dao.NewProjectDAO(cfg.DB), auditWriter, cfg.Logger, mgr)
@@ -135,7 +180,13 @@ func New(cfg Config) (*Server, error) {
 	adminSvc := grpcsvc.NewAdminService(cfg.DB, mgr)
 	quicktunv1.RegisterAdminServiceServer(gs, adminSvc)
 
-	return &Server{cfg: cfg, grpcServer: gs, relay: mgr}, nil
+	return &Server{
+		cfg:              cfg,
+		grpcServer:       gs,
+		relay:            mgr,
+		metricsRegistry:  reg,
+		metricsCollected: serverMetrics,
+	}, nil
 }
 
 // Run binds both listeners and serves until ctx is cancelled or one of the
@@ -152,7 +203,7 @@ func (s *Server) Run(ctx context.Context) error {
 	sw := sweeper.New(dao.NewSiteDAO(s.cfg.DB), sweeper.Config{
 		Interval:     s.cfg.SweeperInterval,
 		OfflineAfter: s.cfg.SiteOfflineAfter,
-	}, s.cfg.Logger)
+	}, s.cfg.Logger, s.metricsCollected)
 	go sw.Run(ctx)
 
 	grpcLn, err := net.Listen("tcp", s.cfg.GRPCListen)
@@ -209,6 +260,11 @@ func (s *Server) Run(ctx context.Context) error {
 	//                     client-side routes like /dashboard, /projects)
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/healthz", health.Handler(healthCheck))
+	// /metrics is mounted on the gateway listener so a single nginx
+	// upstream can scrape it. When MetricsListenAddr is set we ALSO start
+	// a dedicated listener below — Prometheus operators who'd rather not
+	// expose /metrics through the public gateway can scrape that instead.
+	rootMux.Handle("/metrics", metrics.Handler(s.metricsRegistry))
 	rootMux.Handle("/v1/", gatewayMux)
 	rootMux.Handle("/", webui.Handler())
 
@@ -222,6 +278,25 @@ func (s *Server) Run(ctx context.Context) error {
 		Addr:              s.cfg.HTTPListen,
 		Handler:           recoverHandler(s.cfg.Logger, rootMux),
 		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	// Optional dedicated metrics listener. Loopback default in the YAML
+	// example keeps the endpoint off the public network unless the
+	// operator explicitly opens it.
+	if s.cfg.MetricsListenAddr != "" {
+		mmux := http.NewServeMux()
+		mmux.Handle("/metrics", metrics.Handler(s.metricsRegistry))
+		s.metricsServer = &http.Server{
+			Addr:              s.cfg.MetricsListenAddr,
+			Handler:           mmux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		go func() {
+			s.cfg.Logger.Info("metrics listening", zap.String("addr", s.cfg.MetricsListenAddr))
+			if err := s.metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				s.cfg.Logger.Warn("metrics endpoint stopped", zap.Error(err))
+			}
+		}()
 	}
 
 	errCh := make(chan error, 2)
@@ -253,6 +328,9 @@ func (s *Server) Run(ctx context.Context) error {
 	defer cancel()
 	if err := s.httpServer.Shutdown(shutdownCtx); err != nil && firstErr == nil {
 		firstErr = err
+	}
+	if s.metricsServer != nil {
+		_ = s.metricsServer.Shutdown(shutdownCtx)
 	}
 	s.grpcServer.GracefulStop()
 	s.relay.Stop()

@@ -352,6 +352,38 @@ The SQLite file at `/var/lib/quicktun/quicktun.db` holds **all** state
 it up. The `.backup` form above is online-safe; do NOT just `cp` an open
 DB.
 
+## 10a. Prometheus + webhook alerting
+
+All three binaries expose Prometheus metrics in the standard text format.
+The control plane mounts `/metrics` on the gateway HTTP listener
+(`http_listen`); the auth-proxy and agent expose it on dedicated listeners
+opened only when `metrics_listen_addr` is set in their YAML.
+
+Quick check:
+
+```bash
+curl http://127.0.0.1:9091/metrics | grep ^quicktun_
+```
+
+Headline metrics:
+
+| Binary      | Metric                                      | Meaning                                    |
+|-------------|---------------------------------------------|--------------------------------------------|
+| server      | `quicktun_server_requests_total`            | gRPC requests (labelled by method+code)    |
+| server      | `quicktun_server_supervisor_restarts_total` | rathole-server child exits per project     |
+| server      | `quicktun_server_supervisor_alive`          | 1 when the project's rathole is running    |
+| server      | `quicktun_server_sweeper_flipped_total`     | sites flipped online → offline by sweeper  |
+| auth-proxy  | `quicktun_authproxy_connect_total`          | CONNECT requests (labelled by status)      |
+| agent       | `quicktun_agent_bootstrap_total`            | Bootstrap RPC outcomes                     |
+| agent       | `quicktun_agent_heartbeat_total`            | Heartbeat RPC outcomes                     |
+
+The control plane also POSTs a JSON payload to `backend.webhook_url` when a
+project's rathole supervisor crashes more than `crash_loop_threshold` times
+within `crash_loop_window`. Empty webhook URL disables alerting.
+
+See [`docs-site/docs/monitoring.md`](../docs-site/docs/monitoring.md) for the
+full metric list, payload schema, and a Grafana dashboard sketch.
+
 ## 11. Troubleshooting
 
 **Server won't start; "config: ... is required"**

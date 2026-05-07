@@ -59,6 +59,13 @@ type Config struct {
 	// keeps this off-by-default to avoid binding a port on hosts where the
 	// operator isn't using probes.
 	HealthListenAddr string `yaml:"health_listen_addr"`
+
+	// MetricsListenAddr is the bind address for the agent's /metrics HTTP
+	// endpoint. Empty (the default) disables it. Loopback recommended
+	// (e.g. "127.0.0.1:8446") so a node-local Prometheus / cadvisor
+	// scrapes don't traverse the public network. Off-by-default to avoid
+	// binding a port on hosts where the operator hasn't opted in.
+	MetricsListenAddr string `yaml:"metrics_listen_addr"`
 }
 
 // Load reads + parses a YAML config file, applies defaults, and validates

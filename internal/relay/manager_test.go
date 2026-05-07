@@ -63,7 +63,7 @@ func TestManagerStartWritesConfigPerProject(t *testing.T) {
 		Binary:     bin,
 		BinaryArgs: []string{"--mode=sleep"},
 		ConfigDir:  cfgDir,
-	}, zap.NewNop())
+	}, zap.NewNop(), nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -96,7 +96,7 @@ func TestManagerRefreshRewritesConfig(t *testing.T) {
 		Binary:     bin,
 		BinaryArgs: []string{"--mode=sleep"},
 		ConfigDir:  cfgDir,
-	}, zap.NewNop())
+	}, zap.NewNop(), nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, mgr.Start(ctx))
@@ -132,7 +132,7 @@ func TestManagerAddRemoveProject(t *testing.T) {
 		Binary:     bin,
 		BinaryArgs: []string{"--mode=sleep"},
 		ConfigDir:  cfgDir,
-	}, zap.NewNop())
+	}, zap.NewNop(), nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, mgr.Start(ctx))
@@ -162,7 +162,7 @@ func TestManagerSkipsWhenBinaryEmpty(t *testing.T) {
 		Slug: "p1", Name: "P1", RelayPortRange: "20000-20099",
 	})
 	require.NoError(t, err)
-	mgr := relay.NewManager(db, relay.ManagerConfig{ConfigDir: cfgDir}, zap.NewNop())
+	mgr := relay.NewManager(db, relay.ManagerConfig{ConfigDir: cfgDir}, zap.NewNop(), nil, nil)
 	require.NoError(t, mgr.Start(context.Background()))
 
 	// Even with binary="" the config file is rendered, but no supervisor starts.
@@ -189,7 +189,7 @@ func TestManagerRefreshWaitsForOldSupervisor(t *testing.T) {
 
 	mgr := relay.NewManager(db, relay.ManagerConfig{
 		Binary: bin, BinaryArgs: []string{"--mode=sleep"}, ConfigDir: cfgDir,
-	}, zap.NewNop())
+	}, zap.NewNop(), nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, mgr.Start(ctx))
@@ -209,7 +209,7 @@ func TestManagerStartTolersBadBinary(t *testing.T) {
 	mgr := relay.NewManager(db, relay.ManagerConfig{
 		Binary:    "/nonexistent/quicktun-test-rathole",
 		ConfigDir: cfgDir,
-	}, zap.NewNop())
+	}, zap.NewNop(), nil, nil)
 	require.NoError(t, mgr.Start(context.Background()))
 	mgr.Stop()
 }
@@ -219,7 +219,7 @@ func TestManagerStartTolersBadBinary(t *testing.T) {
 func TestManagerStopRefusesAddAfterClose(t *testing.T) {
 	db := newDB(t)
 	cfgDir := t.TempDir()
-	mgr := relay.NewManager(db, relay.ManagerConfig{ConfigDir: cfgDir}, zap.NewNop())
+	mgr := relay.NewManager(db, relay.ManagerConfig{ConfigDir: cfgDir}, zap.NewNop(), nil, nil)
 	require.NoError(t, mgr.Start(context.Background()))
 	mgr.Stop()
 	p, err := dao.NewProjectDAO(db).Create(context.Background(), &model.Project{

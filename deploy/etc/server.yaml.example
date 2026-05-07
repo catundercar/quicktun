@@ -42,3 +42,19 @@ backend:
   # If set, agents bridge through this address (auth-proxy front door)
   # instead of dialing rathole directly. Match nginx stream listener.
   auth_proxy_public_addr: RELAY_DOMAIN:443
+
+  # Optional dedicated /metrics listener for Prometheus. /metrics is also
+  # mounted on the gateway HTTP listener (above) — set this only when you
+  # want to expose metrics on a separate port (e.g. inside a Kubernetes
+  # cluster where the gateway is fronted by an ingress that strips
+  # /metrics). Empty string disables the dedicated listener.
+  metrics_listen_addr: ""
+
+  # Optional webhook for operational alerts (currently: supervisor
+  # crash-loop). Empty string disables alerting.
+  webhook_url: ""
+  webhook_timeout: 5s
+  # The control plane will POST one event when a project's rathole-server
+  # supervisor exits more than this many times within the rolling window.
+  crash_loop_threshold: 5
+  crash_loop_window: 5m

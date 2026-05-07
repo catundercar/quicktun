@@ -165,6 +165,24 @@ if ! grep -q 'smoke-bastion__ssh' "$RELAY_CFG"; then
 fi
 echo "relay: PASS"
 
+# /metrics endpoint should expose the control-plane Prometheus collectors.
+# Be lenient — the counter may have zero samples if no observable RPC has
+# fired yet. Check for either the HELP line (always present once registered)
+# or a sample line.
+HTTP=$(curl -sS -o "$WORKDIR/metrics.txt" -w "%{http_code}" "http://127.0.0.1:${HTTP_PORT}/metrics")
+if [ "$HTTP" != "200" ]; then
+  echo "FAIL: /metrics got HTTP $HTTP" >&2
+  exit 1
+fi
+if grep -q '^quicktun_server_requests_total' "$WORKDIR/metrics.txt" \
+   || grep -q '^# HELP quicktun_server_requests_total' "$WORKDIR/metrics.txt"; then
+  echo "metrics: PASS"
+else
+  echo "FAIL: quicktun_server_requests_total not exposed on /metrics" >&2
+  head -40 "$WORKDIR/metrics.txt" >&2
+  exit 1
+fi
+
 curl -sS -X DELETE "http://127.0.0.1:${HTTP_PORT}/v1/projects/smoke-test/sites/smoke-bastion/services/ssh" \
   -H "Authorization: Bearer $TOKEN" > /dev/null
 

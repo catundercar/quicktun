@@ -60,7 +60,7 @@ func TestSweeperTickFlipsStale(t *testing.T) {
 	sw := sweeper.New(sites, sweeper.Config{
 		Interval:     time.Hour, // unused; we drive Tick directly
 		OfflineAfter: 30 * time.Second,
-	}, nil)
+	}, nil, nil)
 
 	require.NoError(t, sw.Tick(ctx))
 
@@ -80,7 +80,7 @@ func TestSweeperTickNoStaleSitesIsQuiet(t *testing.T) {
 	sw := sweeper.New(sites, sweeper.Config{
 		Interval:     time.Hour,
 		OfflineAfter: 30 * time.Second,
-	}, nil)
+	}, nil, nil)
 
 	// No sites at all — Tick should still succeed without error.
 	require.NoError(t, sw.Tick(context.Background()))
@@ -93,7 +93,7 @@ func TestSweeperRunDisabledWhenIntervalZero(t *testing.T) {
 	sw := sweeper.New(sites, sweeper.Config{
 		Interval:     0,
 		OfflineAfter: 30 * time.Second,
-	}, nil)
+	}, nil, nil)
 
 	done := make(chan struct{})
 	go func() {
@@ -115,7 +115,7 @@ func TestSweeperRunDisabledWhenOfflineAfterZero(t *testing.T) {
 	sw := sweeper.New(sites, sweeper.Config{
 		Interval:     30 * time.Second,
 		OfflineAfter: 0,
-	}, nil)
+	}, nil, nil)
 
 	done := make(chan struct{})
 	go func() {
@@ -136,7 +136,7 @@ func TestSweeperRunStopsOnContextCancel(t *testing.T) {
 	sw := sweeper.New(sites, sweeper.Config{
 		Interval:     50 * time.Millisecond,
 		OfflineAfter: 30 * time.Second,
-	}, nil)
+	}, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

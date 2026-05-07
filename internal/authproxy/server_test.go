@@ -45,7 +45,7 @@ func startEchoBackend(t *testing.T) (string, func()) {
 
 func startProxy(t *testing.T, route authproxy.RouteFunc) (string, context.CancelFunc) {
 	t.Helper()
-	s := authproxy.New(route, zap.NewNop())
+	s := authproxy.New(route, zap.NewNop(), nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.Serve(ctx, "127.0.0.1:0") }()

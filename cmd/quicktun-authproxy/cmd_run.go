@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os/signal"
 	"syscall"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/tulip/quicktun/internal/authproxy"
 	"github.com/tulip/quicktun/internal/health"
+	"github.com/tulip/quicktun/internal/metrics"
 )
 
 func newRunCmd() *cobra.Command {
@@ -45,8 +48,11 @@ func newRunCmd() *cobra.Command {
 				return fmt.Errorf("open db: %w", err)
 			}
 
+			reg := metrics.NewRegistry()
+			apMetrics := metrics.NewAuthProxy(reg)
+
 			router := authproxy.NewRouter(db)
-			srv := authproxy.New(router.Route, lg)
+			srv := authproxy.New(router.Route, lg, apMetrics)
 
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 			defer stop()
@@ -61,6 +67,12 @@ func newRunCmd() *cobra.Command {
 			// via Shutdown.
 			if cfg.HealthListenAddr != "" {
 				go runHealthServer(ctx, lg, db, cfg.HealthListenAddr)
+			}
+
+			// /metrics listener — separate from /healthz so an operator can
+			// expose just one of the two through nginx.
+			if cfg.MetricsListenAddr != "" {
+				go runMetricsServer(ctx, lg, reg, cfg.MetricsListenAddr)
 			}
 
 			if err := srv.Serve(ctx, cfg.ListenAddr); err != nil {
@@ -100,5 +112,23 @@ func runHealthServer(ctx context.Context, lg *zap.Logger, db *gorm.DB, addr stri
 	lg.Info("authproxy: health endpoint listening", zap.String("addr", addr))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		lg.Warn("authproxy: health endpoint stopped", zap.Error(err))
+	}
+}
+
+// runMetricsServer hosts /metrics from the supplied registry on addr. Mirrors
+// runHealthServer's lifetime model: ctx cancel triggers a graceful shutdown.
+func runMetricsServer(ctx context.Context, lg *zap.Logger, reg *prometheus.Registry, addr string) {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler(reg))
+	srv := &http.Server{Addr: addr, Handler: mux}
+
+	go func() {
+		<-ctx.Done()
+		_ = srv.Shutdown(context.Background())
+	}()
+
+	lg.Info("authproxy: metrics endpoint listening", zap.String("addr", addr))
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		lg.Warn("authproxy: metrics endpoint stopped", zap.Error(err))
 	}
 }

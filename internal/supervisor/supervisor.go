@@ -25,6 +25,10 @@ type Spec struct {
 
 	// OnLog receives each line of stdout/stderr.
 	OnLog func(line, source string)
+	// OnStart is invoked once per successful process start (after exec
+	// returns and before Wait blocks). Use to flip an "alive" indicator
+	// such as a Prometheus gauge. May be nil.
+	OnStart func()
 	// OnExit is invoked once per process exit (after each restart attempt).
 	OnExit func(err error)
 }
@@ -126,6 +130,10 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	s.mu.Lock()
 	s.cmd = cmd
 	s.mu.Unlock()
+
+	if s.spec.OnStart != nil {
+		s.spec.OnStart()
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(2)

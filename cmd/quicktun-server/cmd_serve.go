@@ -61,6 +61,11 @@ func serveCmd() *cobra.Command {
 				SessionTTL:          cfg.Session.DefaultTTL,
 				SweeperInterval:     cfg.Backend.SweeperInterval,
 				SiteOfflineAfter:    cfg.Backend.SiteOfflineAfter,
+				MetricsListenAddr:   cfg.Backend.MetricsListenAddr,
+				WebhookURL:          cfg.Backend.WebhookURL,
+				WebhookTimeout:      cfg.Backend.WebhookTimeout,
+				CrashLoopThreshold:  cfg.Backend.CrashLoopThreshold,
+				CrashLoopWindow:     cfg.Backend.CrashLoopWindow,
 			})
 			if err != nil {
 				return err

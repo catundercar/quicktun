@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tulip/quicktun/internal/dao"
+	"github.com/tulip/quicktun/internal/metrics"
 )
 
 // Config controls the sweeper's loop cadence and staleness threshold.
@@ -32,18 +33,20 @@ type Config struct {
 
 // Sweeper holds dependencies for the periodic offline-flip loop.
 type Sweeper struct {
-	sites *dao.SiteDAO
-	cfg   Config
-	lg    *zap.Logger
+	sites   *dao.SiteDAO
+	cfg     Config
+	lg      *zap.Logger
+	metrics *metrics.ServerMetrics // may be nil; helpers are nil-safe
 }
 
 // New returns a Sweeper. A nil logger is replaced with zap.NewNop() so callers
-// don't have to worry about nil-checks.
-func New(sites *dao.SiteDAO, cfg Config, lg *zap.Logger) *Sweeper {
+// don't have to worry about nil-checks. metrics may be nil — every helper on
+// *metrics.ServerMetrics is nil-safe.
+func New(sites *dao.SiteDAO, cfg Config, lg *zap.Logger, m *metrics.ServerMetrics) *Sweeper {
 	if lg == nil {
 		lg = zap.NewNop()
 	}
-	return &Sweeper{sites: sites, cfg: cfg, lg: lg}
+	return &Sweeper{sites: sites, cfg: cfg, lg: lg, metrics: m}
 }
 
 // Run blocks until ctx is cancelled, performing Tick every cfg.Interval.
@@ -92,6 +95,7 @@ func (s *Sweeper) Tick(ctx context.Context) error {
 		s.lg.Info("sweeper marked sites offline",
 			zap.Int64("count", n),
 			zap.Time("threshold", threshold))
+		s.metrics.IncSweeperFlipped(n)
 	}
 	return nil
 }

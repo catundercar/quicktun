@@ -25,3 +25,7 @@ rathole_args: ["--client"]
 # Set true ONLY for dev (e.g. self-signed cert on the control plane).
 # Production deployments must keep this false.
 tls_insecure: false
+
+# Optional /metrics listener for Prometheus. Loopback recommended so the
+# scrape stays on localhost. Empty string disables it.
+metrics_listen_addr: ""

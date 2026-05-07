@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -20,6 +22,7 @@ import (
 
 	quicktunv1 "github.com/tulip/quicktun/gen/go/quicktun/v1"
 	"github.com/tulip/quicktun/internal/health"
+	"github.com/tulip/quicktun/internal/metrics"
 	"github.com/tulip/quicktun/internal/supervisor"
 )
 
@@ -78,6 +81,12 @@ type Runtime struct {
 	// 1 does not retarget the bridge on rebootstrap; if the auth-proxy
 	// endpoint changes we log a warning and keep the original.
 	bridge *bridge
+
+	// metrics + metricsRegistry hold the Prometheus collectors. metrics is
+	// nil-safe at every call site; the registry is consumed by
+	// serveMetrics when MetricsListenAddr is configured.
+	metrics         *metrics.AgentMetrics
+	metricsRegistry *prometheus.Registry
 }
 
 // New dials the control plane and constructs a Runtime ready to Run. The
@@ -115,11 +124,16 @@ func New(cfg *Config, lg *zap.Logger) (*Runtime, error) {
 		return nil, fmt.Errorf("agent: dial: %w", err)
 	}
 
+	reg := metrics.NewRegistry()
+	am := metrics.NewAgent(reg)
+
 	return &Runtime{
-		cfg:  cfg,
-		lg:   lg,
-		conn: conn,
-		cli:  quicktunv1.NewAgentServiceClient(conn),
+		cfg:             cfg,
+		lg:              lg,
+		conn:            conn,
+		cli:             quicktunv1.NewAgentServiceClient(conn),
+		metrics:         am,
+		metricsRegistry: reg,
 	}, nil
 }
 
@@ -173,6 +187,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 	if r.cfg.HealthListenAddr != "" {
 		go r.serveHealth(ctx)
 	}
+	if r.cfg.MetricsListenAddr != "" {
+		go r.serveMetrics(ctx)
+	}
 
 	tick := time.NewTicker(hbInterval)
 	defer tick.Stop()
@@ -225,8 +242,10 @@ func (r *Runtime) bootstrapWithRetry(ctx context.Context) (*quicktunv1.Bootstrap
 			AgentVersion: AgentVersion,
 		})
 		if err == nil {
+			r.metrics.ObserveBootstrap("ok")
 			return resp, nil
 		}
+		r.metrics.ObserveBootstrap("err")
 		lastErr = err
 		// A bad token won't get better — fail fast so the operator sees it.
 		if status.Code(err) == codes.Unauthenticated {
@@ -256,12 +275,18 @@ func (r *Runtime) heartbeat(ctx context.Context) (*quicktunv1.HeartbeatResponse,
 	r.supMu.Lock()
 	cv := r.curVersion
 	r.supMu.Unlock()
-	return r.cli.Heartbeat(ctx, &quicktunv1.HeartbeatRequest{
+	resp, err := r.cli.Heartbeat(ctx, &quicktunv1.HeartbeatRequest{
 		Hostname:      r.hostname(),
 		Os:            runtime.GOOS,
 		AgentVersion:  AgentVersion,
 		ConfigVersion: cv,
 	})
+	if err == nil {
+		r.metrics.ObserveHeartbeat("ok")
+	} else {
+		r.metrics.ObserveHeartbeat("err")
+	}
+	return resp, err
 }
 
 // applyBootstrap renders the rathole-client config, writes it to disk, and
@@ -327,6 +352,8 @@ func (r *Runtime) startSupervisor(cfgPath string) {
 			r.lg.Info("rathole client",
 				zap.String("source", src), zap.String("line", line))
 		},
+		OnStart: func() { r.metrics.SetSupervisorAlive(true) },
+		OnExit:  func(_ error) { r.metrics.SetSupervisorAlive(false) },
 	}, r.lg)
 
 	supCtx, cancel := context.WithCancel(context.Background())
@@ -438,5 +465,23 @@ func (r *Runtime) serveHealth(ctx context.Context) {
 	r.lg.Info("agent: health endpoint listening", zap.String("addr", r.cfg.HealthListenAddr))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		r.lg.Warn("agent: health endpoint stopped", zap.Error(err))
+	}
+}
+
+// serveMetrics runs an HTTP server on r.cfg.MetricsListenAddr that exposes
+// /metrics. Mirrors serveHealth's lifetime model.
+func (r *Runtime) serveMetrics(ctx context.Context) {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler(r.metricsRegistry))
+	srv := &http.Server{Addr: r.cfg.MetricsListenAddr, Handler: mux}
+
+	go func() {
+		<-ctx.Done()
+		_ = srv.Shutdown(context.Background())
+	}()
+
+	r.lg.Info("agent: metrics endpoint listening", zap.String("addr", r.cfg.MetricsListenAddr))
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		r.lg.Warn("agent: metrics endpoint stopped", zap.Error(err))
 	}
 }
