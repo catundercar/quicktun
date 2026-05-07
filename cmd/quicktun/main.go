@@ -32,5 +32,6 @@ func newRootCmd() *cobra.Command {
 		"path to credentials.yaml (default: $QUICKTUN_CONFIG or ~/.config/quicktun/credentials.yaml)")
 	cmd.AddCommand(newLoginCmd())
 	cmd.AddCommand(newVersionCmd())
+	cmd.AddCommand(newForwardCmd())
 	return cmd
 }
