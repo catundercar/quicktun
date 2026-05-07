@@ -1,13 +1,14 @@
 .PHONY: all build test test-race lint clean migrate sync-migrations check-migrations proto proto-lint proto-gen proto-clean
 
 GO ?= go
-BINDIR := bin
-SERVER_BIN := $(BINDIR)/quicktun-server
-AGENT_BIN  := $(BINDIR)/quicktun-agent
+BINDIR        := bin
+SERVER_BIN    := $(BINDIR)/quicktun-server
+AGENT_BIN     := $(BINDIR)/quicktun-agent
+AUTHPROXY_BIN := $(BINDIR)/quicktun-authproxy
 
 all: build
 
-build: $(SERVER_BIN) $(AGENT_BIN)
+build: $(SERVER_BIN) $(AGENT_BIN) $(AUTHPROXY_BIN)
 
 $(SERVER_BIN): sync-migrations
 	@mkdir -p $(BINDIR)
@@ -16,6 +17,10 @@ $(SERVER_BIN): sync-migrations
 $(AGENT_BIN):
 	@mkdir -p $(BINDIR)
 	$(GO) build -o $@ ./cmd/quicktun-agent
+
+$(AUTHPROXY_BIN):
+	@mkdir -p $(BINDIR)
+	$(GO) build -o $@ ./cmd/quicktun-authproxy
 
 test:
 	$(GO) test ./...
