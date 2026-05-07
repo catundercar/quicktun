@@ -34,15 +34,16 @@ import (
 
 // Config bundles construction parameters for Server.
 type Config struct {
-	DB               *gorm.DB
-	Logger           *zap.Logger
-	GRPCListen       string
-	HTTPListen       string
-	RelayAddr        string
-	RatholeBinary    string
-	RatholeArgs      []string
-	RatholeConfigDir string
-	SessionTTL       time.Duration
+	DB                  *gorm.DB
+	Logger              *zap.Logger
+	GRPCListen          string
+	HTTPListen          string
+	RelayAddr           string
+	RatholeBinary       string
+	RatholeArgs         []string
+	RatholeConfigDir    string
+	AuthProxyPublicAddr string
+	SessionTTL          time.Duration
 }
 
 // Server runs the gRPC server and grpc-gateway HTTP server side-by-side.
@@ -122,6 +123,7 @@ func New(cfg Config) (*Server, error) {
 		dao.NewServiceDAO(cfg.DB),
 		cfg.Logger,
 		relayHost,
+		cfg.AuthProxyPublicAddr,
 	)
 	quicktunv1.RegisterAgentServiceServer(gs, agentSvc)
 

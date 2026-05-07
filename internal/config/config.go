@@ -33,9 +33,10 @@ type Config struct {
 
 // BackendConfig configures the relay backend (Phase 1: rathole).
 type BackendConfig struct {
-	RatholeBinary    string   `mapstructure:"rathole_binary"`
-	RatholeArgs      []string `mapstructure:"rathole_args"`
-	RatholeConfigDir string   `mapstructure:"rathole_config_dir"`
+	RatholeBinary       string   `mapstructure:"rathole_binary"`
+	RatholeArgs         []string `mapstructure:"rathole_args"`
+	RatholeConfigDir    string   `mapstructure:"rathole_config_dir"`
+	AuthProxyPublicAddr string   `mapstructure:"auth_proxy_public_addr"` // empty → legacy direct-rathole fallback
 }
 
 // ControlPlaneConfig holds gRPC + grpc-gateway listener settings.

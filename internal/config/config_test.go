@@ -115,4 +115,5 @@ database:
 	require.Equal(t, "rathole", cfg.Backend.RatholeBinary)
 	require.Equal(t, []string{"--server"}, cfg.Backend.RatholeArgs)
 	require.Equal(t, "/var/lib/quicktun/relays", cfg.Backend.RatholeConfigDir)
+	require.Equal(t, "", cfg.Backend.AuthProxyPublicAddr)
 }

@@ -34,17 +34,20 @@ const heartbeatSeconds int32 = 15
 // AgentService implements quicktunv1.AgentServiceServer.
 type AgentService struct {
 	quicktunv1.UnimplementedAgentServiceServer
-	projects  *dao.ProjectDAO
-	sites     *dao.SiteDAO
-	services  *dao.ServiceDAO
-	lg        *zap.Logger
-	relayHost string // public hostname for rathole control endpoint (no port)
+	projects          *dao.ProjectDAO
+	sites             *dao.SiteDAO
+	services          *dao.ServiceDAO
+	lg                *zap.Logger
+	relayHost         string // public hostname for rathole control endpoint (no port)
+	authProxyEndpoint string // if non-empty, sent verbatim as auth_proxy_endpoint
 }
 
 // NewAgentService constructs an AgentService. relayHost is the publicly
 // reachable hostname an agent will dial to reach this server's per-project
 // rathole-server (e.g., "relay.example.com"). The port is derived per-project
 // from the project's relay_port_range[0] (the rathole control port).
+// authProxyEndpoint, if non-empty, is returned verbatim as auth_proxy_endpoint
+// in BootstrapResponse instead of the legacy relayHost:minP construction.
 // If lg is nil a no-op logger is used.
 func NewAgentService(
 	projects *dao.ProjectDAO,
@@ -52,16 +55,18 @@ func NewAgentService(
 	services *dao.ServiceDAO,
 	lg *zap.Logger,
 	relayHost string,
+	authProxyEndpoint string,
 ) *AgentService {
 	if lg == nil {
 		lg = zap.NewNop()
 	}
 	return &AgentService{
-		projects:  projects,
-		sites:     sites,
-		services:  services,
-		lg:        lg,
-		relayHost: relayHost,
+		projects:          projects,
+		sites:             sites,
+		services:          services,
+		lg:                lg,
+		relayHost:         relayHost,
+		authProxyEndpoint: authProxyEndpoint,
 	}
 }
 
@@ -125,14 +130,20 @@ func (a *AgentService) Bootstrap(ctx context.Context, req *quicktunv1.BootstrapR
 		})
 	}
 
+	endpoint := a.authProxyEndpoint
+	if endpoint == "" {
+		// Fallback: legacy direct-rathole wiring (Plan 7 behavior).
+		endpoint = a.relayHost + ":" + strconv.Itoa(int(minP))
+	}
+
 	return &quicktunv1.BootstrapResponse{
-		SiteName:           resource.FormatSiteName(project.Slug, site.Name),
-		ProjectSlug:        project.Slug,
-		SiteSlug:           site.Name,
-		RatholeControlAddr: a.relayHost + ":" + strconv.Itoa(int(minP)),
-		Tunnels:            tunnels,
-		HeartbeatSeconds:   heartbeatSeconds,
-		ConfigVersion:      computeConfigVersion(svcs),
+		SiteName:          resource.FormatSiteName(project.Slug, site.Name),
+		ProjectSlug:       project.Slug,
+		SiteSlug:          site.Name,
+		AuthProxyEndpoint: endpoint,
+		Tunnels:           tunnels,
+		HeartbeatSeconds:  heartbeatSeconds,
+		ConfigVersion:     computeConfigVersion(svcs),
 	}, nil
 }
 

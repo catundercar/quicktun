@@ -60,6 +60,7 @@ func startAgentTestServer(t *testing.T, db *gorm.DB, relayHost string) string {
 		dao.NewServiceDAO(db),
 		zap.NewNop(),
 		relayHost,
+		"", // no auth-proxy; legacy fallback
 	))
 
 	go func() { _ = srv.Serve(lis) }()
@@ -138,7 +139,7 @@ func TestRuntimeBootstrapAndRender(t *testing.T) {
 		return err == nil && fi.Size() > 0
 	}, 5*time.Second, 50*time.Millisecond, "rathole-client.toml never appeared")
 
-	// Verify contents: rathole_control_addr and sha256(token) hex.
+	// Verify contents: auth_proxy_endpoint and sha256(token) hex.
 	body, err := os.ReadFile(cfgPath)
 	require.NoError(t, err)
 	out := string(body)
@@ -207,13 +208,13 @@ func (s *stubAgentServer) Bootstrap(_ context.Context, _ *quicktunv1.BootstrapRe
 	}
 	s.heartbeatEpoch = s.epoch
 	return &quicktunv1.BootstrapResponse{
-		SiteName:           "proj/bastion-1",
-		ProjectSlug:        "proj",
-		SiteSlug:           "bastion-1",
-		RatholeControlAddr: "relay.test:20000",
-		Tunnels:            tunnels,
-		HeartbeatSeconds:   1, // fast loop for tests
-		ConfigVersion:      fmt.Sprintf("v%d", s.epoch),
+		SiteName:          "proj/bastion-1",
+		ProjectSlug:       "proj",
+		SiteSlug:          "bastion-1",
+		AuthProxyEndpoint: "relay.test:20000",
+		Tunnels:           tunnels,
+		HeartbeatSeconds:  1, // fast loop for tests
+		ConfigVersion:     fmt.Sprintf("v%d", s.epoch),
 	}, nil
 }
 

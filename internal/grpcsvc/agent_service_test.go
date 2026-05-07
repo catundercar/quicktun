@@ -20,7 +20,8 @@ import (
 const testRelayHost = "relay.test"
 
 // newAgentService constructs an AgentService against db with the test relay
-// host. Tests inject the agent principal via auth.WithAgentPrincipal directly
+// host and no auth-proxy endpoint (legacy fallback path).
+// Tests inject the agent principal via auth.WithAgentPrincipal directly
 // (the AgentInterceptor path is exercised in internal/auth tests).
 func newAgentService(t *testing.T, db *gorm.DB) *grpcsvc.AgentService {
 	t.Helper()
@@ -30,6 +31,7 @@ func newAgentService(t *testing.T, db *gorm.DB) *grpcsvc.AgentService {
 		dao.NewServiceDAO(db),
 		zap.NewNop(),
 		testRelayHost,
+		"", // no auth-proxy; legacy fallback
 	)
 }
 
@@ -87,8 +89,8 @@ func TestBootstrapReturnsExpectedTunnels(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, resp.Tunnels, 2)
-	// rathole control port == project's RelayPortRange[0] == 20000.
-	require.Equal(t, testRelayHost+":20000", resp.RatholeControlAddr)
+	// fallback: rathole control port == project's RelayPortRange[0] == 20000.
+	require.Equal(t, testRelayHost+":20000", resp.AuthProxyEndpoint)
 	require.Equal(t, "proj", resp.ProjectSlug)
 	require.Equal(t, "bastion-1", resp.SiteSlug)
 	require.Equal(t, "projects/proj/sites/bastion-1", resp.SiteName)
@@ -226,4 +228,27 @@ func TestHeartbeatRejectsDisabledProject(t *testing.T) {
 	require.Error(t, err)
 	st, _ := status.FromError(err)
 	require.Equal(t, codes.FailedPrecondition, st.Code())
+}
+
+// TestBootstrapUsesAuthProxyEndpointWhenSet verifies that when authProxyEndpoint
+// is set on the AgentService, Bootstrap returns it verbatim in AuthProxyEndpoint
+// rather than falling back to relayHost:minPort.
+func TestBootstrapUsesAuthProxyEndpointWhenSet(t *testing.T) {
+	db := openTestDB(t)
+	p, s := mkAgentFixtures(t, db, "proj", "bastion-1")
+
+	const wantEndpoint = "relay.example.com:8443"
+	svc := grpcsvc.NewAgentService(
+		dao.NewProjectDAO(db),
+		dao.NewSiteDAO(db),
+		dao.NewServiceDAO(db),
+		zap.NewNop(),
+		testRelayHost,
+		wantEndpoint,
+	)
+
+	resp, err := svc.Bootstrap(agentCtx(p, s), &quicktunv1.BootstrapRequest{})
+	require.NoError(t, err)
+	require.Equal(t, wantEndpoint, resp.AuthProxyEndpoint,
+		"expected auth_proxy_endpoint to be the configured value, not the relayHost:minP fallback")
 }

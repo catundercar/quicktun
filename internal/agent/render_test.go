@@ -18,10 +18,10 @@ func TestRenderRatholeClientWithTunnels(t *testing.T) {
 	wantHex := hex.EncodeToString(sum[:])
 
 	boot := &quicktunv1.BootstrapResponse{
-		SiteName:           "projects/proj/sites/bastion-1",
-		ProjectSlug:        "proj",
-		SiteSlug:           "bastion-1",
-		RatholeControlAddr: "relay.test:20000",
+		SiteName:          "projects/proj/sites/bastion-1",
+		ProjectSlug:       "proj",
+		SiteSlug:          "bastion-1",
+		AuthProxyEndpoint: "relay.test:20000",
 		Tunnels: []*quicktunv1.TunnelBinding{
 			{ServiceSlug: "ssh", TargetAddr: "127.0.0.1", TargetPort: 22, Proto: "tcp", RelayPort: 20001},
 			{ServiceSlug: "web", TargetAddr: "10.0.0.5", TargetPort: 80, Proto: "tcp", RelayPort: 20002},
@@ -54,9 +54,9 @@ func TestRenderRatholeClientWithTunnels(t *testing.T) {
 
 func TestRenderRatholeClientNoTunnels(t *testing.T) {
 	boot := &quicktunv1.BootstrapResponse{
-		SiteName:           "projects/proj/sites/bastion-1",
-		SiteSlug:           "bastion-1",
-		RatholeControlAddr: "relay.test:20000",
+		SiteName:          "projects/proj/sites/bastion-1",
+		SiteSlug:          "bastion-1",
+		AuthProxyEndpoint: "relay.test:20000",
 	}
 	out, err := agent.RenderRatholeClient(boot, "tok")
 	require.NoError(t, err)
@@ -68,12 +68,12 @@ func TestRenderRatholeClientNoTunnels(t *testing.T) {
 func TestRenderRatholeClientRejectsEmptyControlAddr(t *testing.T) {
 	_, err := agent.RenderRatholeClient(&quicktunv1.BootstrapResponse{}, "tok")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "rathole_control_addr")
+	require.Contains(t, err.Error(), "auth_proxy_endpoint")
 }
 
 func TestRenderRatholeClientRejectsEmptyToken(t *testing.T) {
 	_, err := agent.RenderRatholeClient(&quicktunv1.BootstrapResponse{
-		RatholeControlAddr: "relay.test:20000",
+		AuthProxyEndpoint: "relay.test:20000",
 	}, "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "token")
@@ -88,8 +88,8 @@ func TestRenderRatholeClientEscapesUntrustedFields(t *testing.T) {
 	// A target_addr containing a double-quote must NOT escape the TOML
 	// string boundary. fmt's %q semantics escape it.
 	boot := &quicktunv1.BootstrapResponse{
-		SiteSlug:           "site",
-		RatholeControlAddr: "relay.test:20000",
+		SiteSlug:          "site",
+		AuthProxyEndpoint: "relay.test:20000",
 		Tunnels: []*quicktunv1.TunnelBinding{
 			{ServiceSlug: "evil", TargetAddr: `bad"addr`, TargetPort: 1234},
 		},
