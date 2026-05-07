@@ -1,0 +1,9 @@
+# C:\ProgramData\quicktun\agent.yaml
+control_endpoint: CONTROL_DOMAIN:443
+token: PASTE_FROM_INSTALL_COMMAND
+state_dir: C:\ProgramData\quicktun\agent-state
+rathole_binary: C:\Program Files\quicktun\rathole.exe
+rathole_args:
+  - --client
+tls_insecure: false
+# health_listen_addr: 127.0.0.1:18443    # uncomment to enable /healthz
