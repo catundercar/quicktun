@@ -58,7 +58,7 @@ func TestServerForwardsAfterValidConnect(t *testing.T) {
 	backend, stopBackend := startEchoBackend(t)
 	defer stopBackend()
 
-	proxyAddr, stopProxy := startProxy(t, func(_ context.Context, raw string) (string, error) {
+	proxyAddr, stopProxy := startProxy(t, func(_ context.Context, raw, _ string) (string, error) {
 		if raw != "good-token" {
 			return "", authproxy.ErrUnauthenticated
 		}
@@ -97,7 +97,7 @@ func TestServerForwardsAfterValidConnect(t *testing.T) {
 }
 
 func TestServerRejectsBadMethod(t *testing.T) {
-	proxyAddr, stop := startProxy(t, func(_ context.Context, _ string) (string, error) {
+	proxyAddr, stop := startProxy(t, func(_ context.Context, _, _ string) (string, error) {
 		return "", authproxy.ErrUnauthenticated
 	})
 	defer stop()
@@ -112,7 +112,7 @@ func TestServerRejectsBadMethod(t *testing.T) {
 }
 
 func TestServerRejectsMissingBearer(t *testing.T) {
-	proxyAddr, stop := startProxy(t, func(_ context.Context, raw string) (string, error) {
+	proxyAddr, stop := startProxy(t, func(_ context.Context, raw, _ string) (string, error) {
 		if raw == "" {
 			return "", authproxy.ErrUnauthenticated
 		}
@@ -130,7 +130,7 @@ func TestServerRejectsMissingBearer(t *testing.T) {
 }
 
 func TestServerReturns502OnBackendDial(t *testing.T) {
-	proxyAddr, stop := startProxy(t, func(_ context.Context, _ string) (string, error) {
+	proxyAddr, stop := startProxy(t, func(_ context.Context, _, _ string) (string, error) {
 		return "127.0.0.1:1", nil // unlikely-to-be-listening port
 	})
 	defer stop()
@@ -149,7 +149,7 @@ func TestServerForwardsBufferedClientBytes(t *testing.T) {
 	// see the trailing bytes after preamble.
 	backend, stopBackend := startEchoBackend(t)
 	defer stopBackend()
-	proxyAddr, stop := startProxy(t, func(_ context.Context, _ string) (string, error) {
+	proxyAddr, stop := startProxy(t, func(_ context.Context, _, _ string) (string, error) {
 		return backend, nil
 	})
 	defer stop()

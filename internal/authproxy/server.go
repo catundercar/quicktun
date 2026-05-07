@@ -16,9 +16,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// RouteFunc resolves a token to a backend addr. The Router type satisfies
-// this; tests use stub closures.
-type RouteFunc func(ctx context.Context, rawToken string) (string, error)
+// RouteFunc resolves a token + CONNECT target to a backend addr. The Router
+// type satisfies this; tests use stub closures. target is the request-URI
+// authority from the CONNECT line ("host:port"). It is used by the operator
+// session path for per-service routing; the site agent path ignores it.
+type RouteFunc func(ctx context.Context, rawToken, target string) (string, error)
 
 // Server is a single CONNECT-protocol auth gateway.
 type Server struct {
@@ -99,7 +101,7 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 	}
 
 	rawToken := bearerToken(req.Header.Get("Authorization"))
-	backend, err := s.route(ctx, rawToken)
+	backend, err := s.route(ctx, rawToken, req.Host)
 	if err != nil {
 		if errors.Is(err, ErrInternal) {
 			s.lg.Warn("authproxy: routing internal error", zap.Error(err))

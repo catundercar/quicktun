@@ -2,13 +2,16 @@ package dao_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 
 	"github.com/tulip/quicktun/internal/dao"
+	"github.com/tulip/quicktun/internal/model"
 )
 
 func TestOperatorCreateAndFindByEmail(t *testing.T) {
@@ -90,4 +93,71 @@ func TestSessionRevoke(t *testing.T) {
 
 	_, err = sess.Validate(ctx, raw)
 	require.Error(t, err)
+}
+
+func TestValidateSessionRaw(t *testing.T) {
+	db := openWithModels(t)
+	ops := dao.NewOperatorDAO(db)
+	sess := dao.NewSessionDAO(db)
+	ctx := context.Background()
+
+	op, err := ops.Create(ctx, "vsr@x.com", "h", false)
+	require.NoError(t, err)
+	_, raw, err := sess.Issue(ctx, op.ID, time.Hour, "ua", "ip")
+	require.NoError(t, err)
+
+	gotID, err := sess.ValidateSessionRaw(ctx, raw)
+	require.NoError(t, err)
+	require.Equal(t, op.ID, gotID)
+}
+
+func TestValidateSessionRawRejectsInvalid(t *testing.T) {
+	db := openWithModels(t)
+	sess := dao.NewSessionDAO(db)
+
+	_, err := sess.ValidateSessionRaw(context.Background(), "not-a-real-token")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, gorm.ErrRecordNotFound),
+		"expected wrapped ErrRecordNotFound, got: %v", err)
+}
+
+func TestValidateSessionRawRejectsExpired(t *testing.T) {
+	db := openWithModels(t)
+	ops := dao.NewOperatorDAO(db)
+	sess := dao.NewSessionDAO(db)
+	ctx := context.Background()
+
+	op, err := ops.Create(ctx, "exp@x.com", "h", false)
+	require.NoError(t, err)
+	_, raw, err := sess.Issue(ctx, op.ID, time.Hour, "ua", "ip")
+	require.NoError(t, err)
+
+	// Force expiry into the past directly in the DB.
+	past := time.Now().UTC().Add(-1 * time.Hour)
+	require.NoError(t, db.Model(&model.OperatorSession{}).
+		Where("operator_id = ?", op.ID).
+		Update("expires_at", past).Error)
+
+	_, err = sess.ValidateSessionRaw(ctx, raw)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, gorm.ErrRecordNotFound),
+		"expected wrapped ErrRecordNotFound, got: %v", err)
+}
+
+func TestValidateSessionRawRejectsRevoked(t *testing.T) {
+	db := openWithModels(t)
+	ops := dao.NewOperatorDAO(db)
+	sess := dao.NewSessionDAO(db)
+	ctx := context.Background()
+
+	op, err := ops.Create(ctx, "rev@x.com", "h", false)
+	require.NoError(t, err)
+	rec, raw, err := sess.Issue(ctx, op.ID, time.Hour, "ua", "ip")
+	require.NoError(t, err)
+	require.NoError(t, sess.Revoke(ctx, rec.ID))
+
+	_, err = sess.ValidateSessionRaw(ctx, raw)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, gorm.ErrRecordNotFound),
+		"expected wrapped ErrRecordNotFound, got: %v", err)
 }
