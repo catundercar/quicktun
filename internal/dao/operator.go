@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"gorm.io/gorm"
@@ -44,6 +45,172 @@ func (d *OperatorDAO) FindByID(ctx context.Context, id uint64) (*model.Operator,
 		return nil, fmt.Errorf("dao: find operator by id: %w", err)
 	}
 	return &op, nil
+}
+
+// List returns up to pageSize operators ordered by id ASC, starting after
+// pageToken (which encodes the last seen operator ID). pageSize <= 0 means
+// 50; > 1000 is clamped to 1000. An empty pageToken starts from the first row.
+func (d *OperatorDAO) List(ctx context.Context, pageSize int, pageToken string) ([]model.Operator, error) {
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 1000 {
+		pageSize = 1000
+	}
+	q := d.db.WithContext(ctx).Order("id ASC").Limit(pageSize)
+	if pageToken != "" {
+		afterID, err := strconv.ParseUint(pageToken, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidPageToken, err)
+		}
+		q = q.Where("id > ?", afterID)
+	}
+	var out []model.Operator
+	if err := q.Find(&out).Error; err != nil {
+		return nil, fmt.Errorf("dao: list operators: %w", err)
+	}
+	return out, nil
+}
+
+// NextOperatorPageToken returns the page token to fetch the page AFTER the
+// given page. Returns "" when the page is empty.
+func NextOperatorPageToken(page []model.Operator) string {
+	if len(page) == 0 {
+		return ""
+	}
+	return strconv.FormatUint(page[len(page)-1].ID, 10)
+}
+
+// UpdateIsAdmin flips the is_admin flag on the operator at id. Idempotent.
+func (d *OperatorDAO) UpdateIsAdmin(ctx context.Context, id uint64, isAdmin bool) error {
+	res := d.db.WithContext(ctx).Model(&model.Operator{}).
+		Where("id = ?", id).
+		Update("is_admin", isAdmin)
+	if res.Error != nil {
+		return fmt.Errorf("dao: update operator is_admin: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("dao: update operator is_admin: %w", gorm.ErrRecordNotFound)
+	}
+	return nil
+}
+
+// UpdatePassword overwrites password_hash for the operator at id. The hash
+// must already be bcrypt-encoded; callers (CLI / handlers) hash before calling.
+func (d *OperatorDAO) UpdatePassword(ctx context.Context, id uint64, hashedPassword string) error {
+	res := d.db.WithContext(ctx).Model(&model.Operator{}).
+		Where("id = ?", id).
+		Update("password_hash", hashedPassword)
+	if res.Error != nil {
+		return fmt.Errorf("dao: update operator password: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("dao: update operator password: %w", gorm.ErrRecordNotFound)
+	}
+	return nil
+}
+
+// Delete soft-deletes the operator at id. Idempotent: returns nil when the
+// row is already gone (Save's RowsAffected==0 case is treated as success so
+// repeated DELETE calls don't error).
+func (d *OperatorDAO) Delete(ctx context.Context, id uint64) error {
+	res := d.db.WithContext(ctx).Delete(&model.Operator{}, id)
+	if res.Error != nil {
+		return fmt.Errorf("dao: delete operator: %w", res.Error)
+	}
+	return nil
+}
+
+// CountAdmins returns the number of live operators with is_admin = true.
+// Used to refuse demoting / deleting the last admin.
+func (d *OperatorDAO) CountAdmins(ctx context.Context) (int64, error) {
+	var n int64
+	err := d.db.WithContext(ctx).Model(&model.Operator{}).
+		Where("is_admin = ?", true).
+		Count(&n).Error
+	if err != nil {
+		return 0, fmt.Errorf("dao: count admins: %w", err)
+	}
+	return n, nil
+}
+
+// OperatorProjectAccessDAO encapsulates queries against the
+// operator_project_access join table. Grants are upsert (insert or update
+// the role on a live row); revokes soft-delete and free the (operator,
+// project) tuple for re-grant.
+type OperatorProjectAccessDAO struct{ db *gorm.DB }
+
+// NewOperatorProjectAccessDAO constructs an OperatorProjectAccessDAO.
+func NewOperatorProjectAccessDAO(db *gorm.DB) *OperatorProjectAccessDAO {
+	return &OperatorProjectAccessDAO{db: db}
+}
+
+// List returns all live access grants for operatorID, joined back to the
+// project's slug for human-readable output. The composite uniqueness on
+// (operator_id, project_id) ensures no duplicates.
+type OperatorProjectAccessRow struct {
+	model.OperatorProjectAccess
+	ProjectSlug string `gorm:"column:project_slug"`
+}
+
+// List returns all live access grants for operatorID, including the joined
+// project slug so callers can render results without a second round-trip.
+func (d *OperatorProjectAccessDAO) List(ctx context.Context, operatorID uint64) ([]OperatorProjectAccessRow, error) {
+	var rows []OperatorProjectAccessRow
+	err := d.db.WithContext(ctx).
+		Table("operator_project_access").
+		Select("operator_project_access.*, projects.slug AS project_slug").
+		Joins("JOIN projects ON projects.id = operator_project_access.project_id AND projects.deleted_at IS NULL").
+		Where("operator_project_access.operator_id = ? AND operator_project_access.deleted_at IS NULL", operatorID).
+		Order("operator_project_access.id ASC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("dao: list operator project access: %w", err)
+	}
+	return rows, nil
+}
+
+// Grant upserts an access grant for (operatorID, projectID). If a live row
+// already exists, its role is updated; otherwise a new row is inserted.
+// Returns the resulting row.
+func (d *OperatorProjectAccessDAO) Grant(ctx context.Context, operatorID, projectID uint64, role model.ProjectRole) (*model.OperatorProjectAccess, error) {
+	var existing model.OperatorProjectAccess
+	err := d.db.WithContext(ctx).
+		Where("operator_id = ? AND project_id = ?", operatorID, projectID).
+		First(&existing).Error
+	if err == nil {
+		if existing.Role != role {
+			existing.Role = role
+			if e := d.db.WithContext(ctx).Save(&existing).Error; e != nil {
+				return nil, fmt.Errorf("dao: update access role: %w", e)
+			}
+		}
+		return &existing, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("dao: lookup access: %w", err)
+	}
+	row := &model.OperatorProjectAccess{
+		OperatorID: operatorID,
+		ProjectID:  projectID,
+		Role:       role,
+	}
+	if err := d.db.WithContext(ctx).Create(row).Error; err != nil {
+		return nil, fmt.Errorf("dao: create access: %w", err)
+	}
+	return row, nil
+}
+
+// Revoke soft-deletes the (operatorID, projectID) access grant. Idempotent:
+// missing rows are not an error.
+func (d *OperatorProjectAccessDAO) Revoke(ctx context.Context, operatorID, projectID uint64) error {
+	res := d.db.WithContext(ctx).
+		Where("operator_id = ? AND project_id = ?", operatorID, projectID).
+		Delete(&model.OperatorProjectAccess{})
+	if res.Error != nil {
+		return fmt.Errorf("dao: revoke access: %w", res.Error)
+	}
+	return nil
 }
 
 // SessionDAO encapsulates session create / validate / revoke.

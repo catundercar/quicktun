@@ -1,16 +1,74 @@
-// Operator (control plane user) data shapes.
+// OperatorService — admin-only operator CRUD + project access management.
 //
-// In Phase 1 there is no full OperatorService — operators are seeded via the
-// `quicktun-server admin create-operator` CLI. The Operator message itself is
-// referenced from AuthService.WhoAmI, so it lives here.
+// Operator is the control-plane user (you / your ops team). Sessions are
+// issued by AuthService.Login; this service manages the operator records
+// and their per-project access grants.
 syntax = "proto3";
 
 package quicktun.v1;
 
+import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
+import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/tulip/quicktun/gen/go/quicktun/v1;quicktunv1";
+
+// OperatorService manages operator accounts and per-project access grants.
+// All RPCs are admin-only. Self-mutating safety guards live in the server
+// (refuse self-delete, refuse demoting last admin).
+service OperatorService {
+  rpc ListOperators(ListOperatorsRequest) returns (ListOperatorsResponse) {
+    option (google.api.http) = {
+      get: "/v1/operators"
+    };
+  }
+
+  rpc GetOperator(GetOperatorRequest) returns (Operator) {
+    option (google.api.http) = {
+      get: "/v1/{name=operators/*}"
+    };
+  }
+
+  rpc CreateOperator(CreateOperatorRequest) returns (Operator) {
+    option (google.api.http) = {
+      post: "/v1/operators"
+      body: "*"
+    };
+  }
+
+  rpc UpdateOperator(UpdateOperatorRequest) returns (Operator) {
+    option (google.api.http) = {
+      patch: "/v1/{operator.name=operators/*}"
+      body: "*"
+    };
+  }
+
+  rpc DeleteOperator(DeleteOperatorRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/v1/{name=operators/*}"
+    };
+  }
+
+  rpc ListProjectAccess(ListProjectAccessRequest) returns (ListProjectAccessResponse) {
+    option (google.api.http) = {
+      get: "/v1/{operator=operators/*}/projectAccess"
+    };
+  }
+
+  rpc GrantProjectAccess(GrantProjectAccessRequest) returns (OperatorProjectAccess) {
+    option (google.api.http) = {
+      post: "/v1/{operator=operators/*}/projectAccess"
+      body: "*"
+    };
+  }
+
+  rpc RevokeProjectAccess(RevokeProjectAccessRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/v1/{operator=operators/*}/projectAccess/{project_slug}"
+    };
+  }
+}
 
 // Operator is one team member with control-plane access.
 message Operator {
@@ -24,4 +82,71 @@ message Operator {
   // Mutable.
   string email    = 10 [(google.api.field_behavior) = REQUIRED];
   bool   is_admin = 11;
+}
+
+message ListOperatorsRequest {
+  // page_size: 1..1000; default 50 when 0.
+  uint32 page_size = 1;
+  // page_token: opaque cursor returned from a prior ListOperators call.
+  string page_token = 2;
+}
+
+message ListOperatorsResponse {
+  repeated Operator operators = 1;
+  string next_page_token = 2;
+}
+
+message GetOperatorRequest {
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CreateOperatorRequest {
+  Operator operator = 1 [(google.api.field_behavior) = REQUIRED];
+  // Initial password (plaintext). Server bcrypt-hashes before persisting.
+  string password = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+message UpdateOperatorRequest {
+  Operator operator = 1 [(google.api.field_behavior) = REQUIRED];
+  // Comma-separated list of fields to update. Supported: "is_admin", "password".
+  // Use "password" together with the password field below to rotate credentials.
+  string update_mask = 2;
+  // Optional new password (plaintext). Only honoured when update_mask names
+  // "password".
+  string password = 3;
+}
+
+message DeleteOperatorRequest {
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+// OperatorProjectAccess is one (operator, project, role) grant.
+message OperatorProjectAccess {
+  // Format: operators/{operator}
+  string operator = 1;
+  // The project slug (not full resource name) for compactness.
+  string project_slug = 2;
+  // viewer | operator | admin (project-level role).
+  string role = 3;
+  google.protobuf.Timestamp grant_time = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+message ListProjectAccessRequest {
+  // Format: operators/{operator}
+  string operator = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message ListProjectAccessResponse {
+  repeated OperatorProjectAccess access = 1;
+}
+
+message GrantProjectAccessRequest {
+  string operator = 1 [(google.api.field_behavior) = REQUIRED];
+  string project_slug = 2 [(google.api.field_behavior) = REQUIRED];
+  string role = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message RevokeProjectAccessRequest {
+  string operator = 1 [(google.api.field_behavior) = REQUIRED];
+  string project_slug = 2 [(google.api.field_behavior) = REQUIRED];
 }

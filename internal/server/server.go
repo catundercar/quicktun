@@ -183,6 +183,15 @@ func New(cfg Config) (*Server, error) {
 	auditSvc := grpcsvc.NewAuditService(dao.NewAuditDAO(cfg.DB))
 	quicktunv1.RegisterAuditServiceServer(gs, auditSvc)
 
+	operatorSvc := grpcsvc.NewOperatorService(
+		dao.NewOperatorDAO(cfg.DB),
+		dao.NewOperatorProjectAccessDAO(cfg.DB),
+		dao.NewProjectDAO(cfg.DB),
+		auditWriter,
+		cfg.Logger,
+	)
+	quicktunv1.RegisterOperatorServiceServer(gs, operatorSvc)
+
 	return &Server{
 		cfg:              cfg,
 		grpcServer:       gs,
@@ -246,6 +255,11 @@ func (s *Server) Run(ctx context.Context) error {
 		grpcLn.Close()
 		s.relay.Stop()
 		return fmt.Errorf("server: register audit gateway: %w", err)
+	}
+	if err := quicktunv1.RegisterOperatorServiceHandlerFromEndpoint(ctx, gatewayMux, s.cfg.GRPCListen, dialOpts); err != nil {
+		grpcLn.Close()
+		s.relay.Stop()
+		return fmt.Errorf("server: register operator gateway: %w", err)
 	}
 
 	// Mount /healthz on a top-level mux so probes (k8s, nginx, systemd) can
