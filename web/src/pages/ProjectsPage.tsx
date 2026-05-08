@@ -57,7 +57,7 @@ export function ProjectsPage() {
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ['projects'],
+    queryKey: ['projects', 'infinite'],
     initialPageParam: '',
     queryFn: ({ pageParam }) => {
       // ListProjectsRequest carries pagination inside the nested `page`

@@ -99,7 +99,7 @@ export function SitesPage() {
   }, [projectSlug, searchParams, setSearchParams]);
 
   const sitesQ = useInfiniteQuery({
-    queryKey: ['sites', projectSlug],
+    queryKey: ['sites', 'infinite', projectSlug],
     enabled: !!projectSlug,
     initialPageParam: '',
     queryFn: ({ pageParam }) => {

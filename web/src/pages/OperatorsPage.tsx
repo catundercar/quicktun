@@ -59,7 +59,7 @@ export function OperatorsPage() {
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ['operators'],
+    queryKey: ['operators', 'infinite'],
     enabled: isAdmin,
     initialPageParam: '',
     queryFn: ({ pageParam }) => {
