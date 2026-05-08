@@ -38,5 +38,6 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newServiceCmd())
 	cmd.AddCommand(newOperatorCmd())
 	cmd.AddCommand(newStatusCmd())
+	cmd.AddCommand(newTokenCmd())
 	return cmd
 }

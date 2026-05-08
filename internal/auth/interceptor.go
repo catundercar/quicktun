@@ -2,12 +2,15 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"strings"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"gorm.io/gorm"
 
 	"github.com/tulip/quicktun/internal/model"
 )
@@ -17,6 +20,22 @@ import (
 // interceptor unit-testable without a database.
 type Validator interface {
 	Validate(ctx context.Context, rawToken string) (*model.Operator, error)
+}
+
+// SATokenValidator validates a raw service-account bearer token and
+// returns the owning operator id. Implemented by
+// *dao.ServiceAccountTokenDAO. Returning gorm.ErrRecordNotFound (wrapped)
+// signals an unknown / expired / revoked token; any other error is logged
+// as an internal failure.
+type SATokenValidator interface {
+	ValidateRaw(ctx context.Context, raw string) (uint64, error)
+}
+
+// OperatorLoader resolves an operator id to a *model.Operator. Implemented
+// by *dao.OperatorDAO. Used by the SA-token branch to attach the same
+// shape of principal as the session branch.
+type OperatorLoader interface {
+	FindByID(ctx context.Context, id uint64) (*model.Operator, error)
 }
 
 // ctxKey is unexported to prevent collisions with other packages' context keys.
@@ -53,14 +72,43 @@ func RawTokenFromContext(ctx context.Context) string {
 	return v
 }
 
+// InterceptorOptions tunes NewUnaryInterceptor. Zero values are safe.
+type InterceptorOptions struct {
+	// SATokens enables the service-account-token branch. When nil, only
+	// session tokens are accepted.
+	SATokens SATokenValidator
+	// Operators is required when SATokens is set, so the interceptor can
+	// load the principal *model.Operator for the SA branch (mirroring the
+	// shape attached by the session branch).
+	Operators OperatorLoader
+	// Logger is optional; nil → no-op.
+	Logger *zap.Logger
+	// Unauth is the list of FullMethod values that bypass authentication.
+	Unauth []string
+}
+
 // NewUnaryInterceptor returns a grpc.UnaryServerInterceptor that:
 //   - lets requests for any FullMethod listed in `unauth` proceed without auth
 //   - extracts a Bearer token from the "authorization" gRPC metadata header
 //   - validates it via Validator and attaches operator + raw token to ctx
 //   - returns codes.Unauthenticated on missing or invalid token
+//
+// Variadic `unauth` is preserved for backwards compatibility — older call
+// sites pass only the session validator + a few unauth method names. Use
+// NewUnaryInterceptorWithOptions for the SA-token-aware form.
 func NewUnaryInterceptor(v Validator, unauth ...string) grpc.UnaryServerInterceptor {
-	allowlist := make(map[string]struct{}, len(unauth))
-	for _, m := range unauth {
+	return NewUnaryInterceptorWithOptions(v, InterceptorOptions{Unauth: unauth})
+}
+
+// NewUnaryInterceptorWithOptions is the explicit constructor that wires in
+// SA-token validation alongside session validation.
+func NewUnaryInterceptorWithOptions(v Validator, opts InterceptorOptions) grpc.UnaryServerInterceptor {
+	lg := opts.Logger
+	if lg == nil {
+		lg = zap.NewNop()
+	}
+	allowlist := make(map[string]struct{}, len(opts.Unauth))
+	for _, m := range opts.Unauth {
 		allowlist[m] = struct{}{}
 	}
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
@@ -77,13 +125,45 @@ func NewUnaryInterceptor(v Validator, unauth ...string) grpc.UnaryServerIntercep
 		if token == "" {
 			return nil, status.Error(codes.Unauthenticated, "missing bearer token")
 		}
-		op, err := v.Validate(ctx, token)
-		if err != nil {
-			return nil, status.Error(codes.Unauthenticated, "invalid or expired token")
+
+		// Try the session path first — that's the common case (web UI,
+		// CLI). Don't log on the failure path; we may still succeed via
+		// the SA-token branch.
+		op, sessErr := v.Validate(ctx, token)
+		if sessErr == nil {
+			ctx = WithOperator(ctx, op)
+			ctx = WithRawToken(ctx, token)
+			return handler(ctx, req)
 		}
-		ctx = WithOperator(ctx, op)
-		ctx = WithRawToken(ctx, token)
-		return handler(ctx, req)
+
+		// Fall through to the SA-token branch only when both validators
+		// are configured — older call sites that pass only a session
+		// validator behave exactly as before.
+		if opts.SATokens != nil && opts.Operators != nil {
+			opID, saErr := opts.SATokens.ValidateRaw(ctx, token)
+			if saErr == nil {
+				op, lerr := opts.Operators.FindByID(ctx, opID)
+				if lerr != nil {
+					if errors.Is(lerr, gorm.ErrRecordNotFound) {
+						lg.Warn("auth: sa token resolved to missing operator",
+							zap.Uint64("operator_id", opID))
+						return nil, status.Error(codes.Unauthenticated, "invalid or expired token")
+					}
+					lg.Warn("auth: sa token operator lookup failed", zap.Error(lerr))
+					return nil, status.Error(codes.Internal, "internal error")
+				}
+				ctx = WithOperator(ctx, op)
+				ctx = WithRawToken(ctx, token)
+				return handler(ctx, req)
+			}
+			// Both branches failed: log once at warn level so the operator
+			// can correlate auth misses without spamming for each session
+			// miss.
+			lg.Warn("auth: bearer token rejected by both session and SA paths",
+				zap.NamedError("session_err", sessErr),
+				zap.NamedError("sa_err", saErr))
+		}
+		return nil, status.Error(codes.Unauthenticated, "invalid or expired token")
 	}
 }
 

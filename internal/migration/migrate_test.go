@@ -24,6 +24,7 @@ func TestUpAppliesAllTables(t *testing.T) {
 		"projects", "operator_project_access",
 		"sites", "services", "site_agent_tokens",
 		"audit_logs",
+		"service_account_tokens",
 	}
 	for _, table := range wanted {
 		var count int

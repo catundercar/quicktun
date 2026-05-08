@@ -115,10 +115,16 @@ func New(cfg Config) (*Server, error) {
 
 	ops := dao.NewOperatorDAO(cfg.DB)
 	sessions := dao.NewSessionDAO(cfg.DB)
+	saTokens := dao.NewServiceAccountTokenDAO(cfg.DB)
 	authSvc := grpcsvc.NewAuthService(ops, sessions, cfg.SessionTTL)
 
 	metricsIntc := auth.MetricsInterceptor(serverMetrics)
-	intc := auth.NewUnaryInterceptor(sessions, "/quicktun.v1.AuthService/Login")
+	intc := auth.NewUnaryInterceptorWithOptions(sessions, auth.InterceptorOptions{
+		SATokens:  saTokens,
+		Operators: ops,
+		Logger:    cfg.Logger,
+		Unauth:    []string{"/quicktun.v1.AuthService/Login"},
+	})
 	agentIntc := auth.AgentInterceptor(cfg.DB, cfg.Logger)
 	// Order matters: metricsIntc must wrap the others so it observes the
 	// final status code (including 401 from intc / agentIntc).
@@ -192,6 +198,14 @@ func New(cfg Config) (*Server, error) {
 	)
 	quicktunv1.RegisterOperatorServiceServer(gs, operatorSvc)
 
+	saSvc := grpcsvc.NewServiceAccountService(
+		saTokens,
+		ops,
+		auditWriter,
+		cfg.Logger,
+	)
+	quicktunv1.RegisterServiceAccountServiceServer(gs, saSvc)
+
 	return &Server{
 		cfg:              cfg,
 		grpcServer:       gs,
@@ -260,6 +274,11 @@ func (s *Server) Run(ctx context.Context) error {
 		grpcLn.Close()
 		s.relay.Stop()
 		return fmt.Errorf("server: register operator gateway: %w", err)
+	}
+	if err := quicktunv1.RegisterServiceAccountServiceHandlerFromEndpoint(ctx, gatewayMux, s.cfg.GRPCListen, dialOpts); err != nil {
+		grpcLn.Close()
+		s.relay.Stop()
+		return fmt.Errorf("server: register service-account gateway: %w", err)
 	}
 
 	// Mount /healthz on a top-level mux so probes (k8s, nginx, systemd) can

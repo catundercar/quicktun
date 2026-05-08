@@ -258,4 +258,20 @@ done
     { echo "FAIL: sweeper didn't flip site (still $SITE_STATUS)"; exit 1; }
 echo "sweeper: PASS"
 
-echo "PASS: end-to-end CLI login + list + forward + /healthz + status + sweeper"
+# 12. Service-account token: admin mints an SA token bound to operator id 1
+# (the seeded admin), then a curl with that bearer must hit /v1/projects
+# successfully. This exercises the dual-auth path in the operator
+# interceptor (session validator fails for SA tokens; SA validator
+# accepts them).
+SA_JSON=$(./bin/quicktun --config "$CRED_FILE" token create operators/1 \
+    --description=smoke --json 2>/dev/null)
+SA_RAW=$(echo "$SA_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["raw"])')
+[[ -n "$SA_RAW" ]] || { echo "FAIL: capture SA raw token"; echo "$SA_JSON" >&2; exit 1; }
+
+HTTP=$(curl -sS -o /dev/null -w "%{http_code}" \
+    -H "Authorization: Bearer $SA_RAW" \
+    "http://127.0.0.1:$HTTP_PORT/v1/projects")
+[[ "$HTTP" == "200" ]] || { echo "FAIL: SA token didn't authenticate (got $HTTP)"; exit 1; }
+echo "service-account token: PASS"
+
+echo "PASS: end-to-end CLI login + list + forward + /healthz + status + sweeper + SA token"
