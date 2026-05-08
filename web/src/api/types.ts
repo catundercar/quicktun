@@ -100,3 +100,43 @@ export type InstallCommandResponse = {
   token: string;
   expireTime?: string;
 };
+
+// ----- Audit logs -----
+
+export type AuditLogEntry = {
+  // proto uint64 → JSON serializes as string
+  id: string;
+  time?: string;
+  operatorEmail: string;
+  sourceIp?: string;
+  action: string;
+  target?: string;
+  projectSlug?: string;
+  extraJson?: string;
+};
+
+export type ListAuditLogsResponse = {
+  entries?: AuditLogEntry[];
+  nextPageToken?: string;
+  totalSize?: number;
+};
+
+// ----- Operator service -----
+
+export type ListOperatorsResponse = {
+  operators?: Operator[];
+  nextPageToken?: string;
+};
+
+export type OperatorProjectAccess = {
+  // operators/<id>
+  operator: string;
+  projectSlug: string;
+  // viewer | operator | admin
+  role: string;
+  grantTime?: string;
+};
+
+export type ListProjectAccessResponse = {
+  access?: OperatorProjectAccess[];
+};

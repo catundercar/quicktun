@@ -62,15 +62,17 @@ export function AppShell() {
         </Group>
       </MantineAppShell.Header>
       <MantineAppShell.Navbar p="xs">
-        {navItems.map((it) => (
-          <NavLink
-            key={it.path}
-            label={it.label}
-            leftSection={it.icon}
-            active={loc.pathname.startsWith(it.path)}
-            onClick={() => nav(it.path)}
-          />
-        ))}
+        {navItems
+          .filter((it) => !it.adminOnly || isAdmin)
+          .map((it) => (
+            <NavLink
+              key={it.path}
+              label={it.label}
+              leftSection={it.icon}
+              active={loc.pathname.startsWith(it.path)}
+              onClick={() => nav(it.path)}
+            />
+          ))}
       </MantineAppShell.Navbar>
       <MantineAppShell.Main>
         <Outlet />
