@@ -1,0 +1,62 @@
+// AuditService — admin-only audit log query API.
+syntax = "proto3";
+
+package quicktun.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/tulip/quicktun/gen/go/quicktun/v1;quicktunv1";
+
+// AuditService exposes the append-only audit log to admin operators. The
+// underlying table is written by audit.Writer (server-side); this service is
+// read-only.
+service AuditService {
+  // ListAuditLogs returns audit log entries newest-first, with optional
+  // filters and cursor pagination. Admin-only.
+  rpc ListAuditLogs(ListAuditLogsRequest) returns (ListAuditLogsResponse) {
+    option (google.api.http) = {
+      get: "/v1/audit-logs"
+    };
+  }
+}
+
+message ListAuditLogsRequest {
+  // page_size: 1..200; default 50 when 0.
+  uint32 page_size = 1;
+  // page_token: opaque cursor returned from a prior ListAuditLogs call.
+  string page_token = 2;
+
+  // Optional filters. All are AND'd together. Empty means "no filter".
+  string operator_email = 3;
+  string project_slug = 4;
+  // action_prefix matches by SQL LIKE 'prefix%' on the action column,
+  // e.g. "site." matches site.create / site.update / etc.
+  string action_prefix = 5;
+  google.protobuf.Timestamp since = 6;
+  google.protobuf.Timestamp until = 7;
+}
+
+message ListAuditLogsResponse {
+  repeated AuditLogEntry entries = 1;
+  // next_page_token is empty when there are no further pages. Pass it as
+  // ListAuditLogsRequest.page_token to fetch the next page.
+  string next_page_token = 2;
+  // total_size is the count of rows matching the filters (pre-pagination).
+  uint32 total_size = 3;
+}
+
+message AuditLogEntry {
+  uint64 id = 1;
+  google.protobuf.Timestamp time = 2;
+  string operator_email = 3;
+  string source_ip = 4;
+  // action is a dotted resource verb, e.g. "site.create".
+  string action = 5;
+  // target is a canonical resource name, e.g. "projects/p1/sites/s1".
+  string target = 6;
+  // project_slug is empty for cross-project / system entries.
+  string project_slug = 7;
+  // extra_json is the raw JSON blob written by the server (may be empty).
+  string extra_json = 8;
+}
