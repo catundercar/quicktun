@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   Badge,
@@ -18,7 +18,13 @@ import {
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
-import { IconPlus, IconTrash, IconArrowRight, IconEdit } from '@tabler/icons-react';
+import {
+  IconArrowRight,
+  IconEdit,
+  IconPlus,
+  IconSearch,
+  IconTrash,
+} from '@tabler/icons-react';
 import { api, ApiError } from '../api/client';
 import type { ListProjectsResponse, Project } from '../api/types';
 import { ResourceTable, EmptyState } from '../components/ResourceTable';
@@ -27,6 +33,7 @@ import { EditProjectModal } from '../components/EditProjectModal';
 import { formatTime } from '../utils/format';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
+const PAGE_SIZE = 50;
 
 function statusBadge(status: string) {
   if (status === 'PROJECT_STATUS_ACTIVE') return <Badge color="green">运行中</Badge>;
@@ -40,11 +47,42 @@ export function ProjectsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [toDelete, setToDelete] = useState<Project | null>(null);
   const [toEdit, setToEdit] = useState<Project | null>(null);
+  const [search, setSearch] = useState('');
 
-  const { data, isLoading, error } = useQuery({
+  const {
+    data,
+    isLoading,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ['projects'],
-    queryFn: () => api.get<ListProjectsResponse>('/v1/projects'),
+    initialPageParam: '',
+    queryFn: ({ pageParam }) => {
+      // ListProjectsRequest carries pagination inside the nested `page`
+      // message — gRPC-gateway flattens these to dotted query params.
+      const params = new URLSearchParams({ 'page.pageSize': String(PAGE_SIZE) });
+      if (pageParam) params.set('page.pageToken', pageParam as string);
+      return api.get<ListProjectsResponse>(`/v1/projects?${params.toString()}`);
+    },
+    getNextPageParam: (last) => last.page?.nextPageToken || undefined,
   });
+
+  const projects: Project[] = useMemo(
+    () => data?.pages.flatMap((p) => p.projects ?? []) ?? [],
+    [data],
+  );
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return projects;
+    const q = search.trim().toLowerCase();
+    return projects.filter(
+      (p) =>
+        p.displayName.toLowerCase().includes(q) ||
+        p.projectId.toLowerCase().includes(q),
+    );
+  }, [projects, search]);
 
   const createForm = useForm({
     initialValues: { projectId: '', displayName: '', relayPortRange: '' },
@@ -97,8 +135,6 @@ export function ProjectsPage() {
   if (isLoading) return <Loader />;
   if (error) return <Alert color="red">{(error as Error).message}</Alert>;
 
-  const projects = data?.projects ?? [];
-
   return (
     <Stack>
       <Group justify="space-between">
@@ -108,23 +144,34 @@ export function ProjectsPage() {
         </Button>
       </Group>
 
+      <TextInput
+        placeholder="按名称或 ID 搜索"
+        leftSection={<IconSearch size={14} />}
+        value={search}
+        onChange={(e) => setSearch(e.currentTarget.value)}
+      />
+
       <Card withBorder padding={0} radius="md">
-        {projects.length === 0 ? (
+        {filtered.length === 0 ? (
           <EmptyState
-            title="暂无项目"
+            title={search ? '未找到匹配的项目' : '暂无项目'}
             hint={
-              <>
-                点击右上角{' '}
-                <Text span fw={600}>
-                  创建项目
-                </Text>{' '}
-                按钮以新建第一个项目。
-              </>
+              search ? (
+                '尝试调整搜索关键字。'
+              ) : (
+                <>
+                  点击右上角{' '}
+                  <Text span fw={600}>
+                    创建项目
+                  </Text>{' '}
+                  按钮以新建第一个项目。
+                </>
+              )
             }
           />
         ) : (
           <ResourceTable
-            data={projects}
+            data={filtered}
             rowKey={(p) => p.name}
             columns={[
               { key: 'projectId', header: '名称', render: (p) => <Text ff="monospace">{p.projectId}</Text> },
@@ -191,6 +238,21 @@ export function ProjectsPage() {
           />
         )}
       </Card>
+
+      <Group justify="space-between" align="center">
+        <Text size="xs" c="dimmed">
+          共 {projects.length} 个项目
+          {search ? ` · 匹配 ${filtered.length} 个` : ''}
+        </Text>
+        <Button
+          variant="default"
+          onClick={() => fetchNextPage()}
+          disabled={!hasNextPage || isFetchingNextPage}
+          loading={isFetchingNextPage}
+        >
+          {hasNextPage ? '加载更多' : '没有更多了'}
+        </Button>
+      </Group>
 
       {/* Create modal */}
       <Modal

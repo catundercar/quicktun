@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ActionIcon,
   Alert,
@@ -10,13 +10,12 @@ import {
   Group,
   Loader,
   Modal,
-  PasswordInput,
   Stack,
   Text,
+  TextInput,
   Title,
   Tooltip,
 } from '@mantine/core';
-import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
 import {
   IconChevronDown,
@@ -24,6 +23,7 @@ import {
   IconKey,
   IconLock,
   IconPlus,
+  IconSearch,
   IconShieldCheck,
   IconShieldOff,
   IconTrash,
@@ -31,11 +31,14 @@ import {
 import { api, ApiError } from '../api/client';
 import type { ListOperatorsResponse, Operator } from '../api/types';
 import { useAuthStore } from '../auth/store';
+import { ChangePasswordForm } from '../components/ChangePasswordForm';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { CreateOperatorModal } from '../components/CreateOperatorModal';
 import { OperatorAccessPanel } from '../components/OperatorAccessPanel';
 import { EmptyState } from '../components/ResourceTable';
 import { formatTime } from '../utils/format';
+
+const PAGE_SIZE = 50;
 
 export function OperatorsPage() {
   const isAdmin = useAuthStore((s) => s.isAdmin);
@@ -46,12 +49,41 @@ export function OperatorsPage() {
   const [toDelete, setToDelete] = useState<Operator | null>(null);
   const [pwTarget, setPwTarget] = useState<Operator | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
 
-  const { data, isLoading, error } = useQuery({
+  const {
+    data,
+    isLoading,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ['operators'],
-    queryFn: () => api.get<ListOperatorsResponse>('/v1/operators'),
     enabled: isAdmin,
+    initialPageParam: '',
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ page_size: String(PAGE_SIZE) });
+      if (pageParam) params.set('page_token', pageParam as string);
+      return api.get<ListOperatorsResponse>(`/v1/operators?${params.toString()}`);
+    },
+    getNextPageParam: (last) => last.nextPageToken || undefined,
   });
+
+  const operators: Operator[] = useMemo(
+    () => data?.pages.flatMap((p) => p.operators ?? []) ?? [],
+    [data],
+  );
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return operators;
+    const q = search.trim().toLowerCase();
+    return operators.filter(
+      (o) =>
+        o.email.toLowerCase().includes(q) ||
+        o.operatorId.toLowerCase().includes(q),
+    );
+  }, [operators, search]);
 
   const toggleAdminMu = useMutation({
     mutationFn: (op: Operator) =>
@@ -99,8 +131,6 @@ export function OperatorsPage() {
   if (isLoading) return <Loader />;
   if (error) return <Alert color="red">{(error as Error).message}</Alert>;
 
-  const operators = data?.operators ?? [];
-
   return (
     <Stack>
       <Group justify="space-between">
@@ -110,23 +140,34 @@ export function OperatorsPage() {
         </Button>
       </Group>
 
+      <TextInput
+        placeholder="按邮箱或 ID 搜索"
+        leftSection={<IconSearch size={14} />}
+        value={search}
+        onChange={(e) => setSearch(e.currentTarget.value)}
+      />
+
       <Card withBorder padding={0} radius="md">
-        {operators.length === 0 ? (
+        {filtered.length === 0 ? (
           <EmptyState
-            title="暂无操作员"
+            title={search ? '未找到匹配的操作员' : '暂无操作员'}
             hint={
-              <>
-                点击右上角{' '}
-                <Text span fw={600}>
-                  创建操作员
-                </Text>{' '}
-                按钮以新建账号。
-              </>
+              search ? (
+                '尝试调整搜索关键字。'
+              ) : (
+                <>
+                  点击右上角{' '}
+                  <Text span fw={600}>
+                    创建操作员
+                  </Text>{' '}
+                  按钮以新建账号。
+                </>
+              )
             }
           />
         ) : (
           <Stack gap={0}>
-            {operators.map((op) => {
+            {filtered.map((op) => {
               const isSelf = op.email === operatorEmail;
               const isExpanded = expanded === op.operatorId;
               return (
@@ -191,7 +232,10 @@ export function OperatorsPage() {
                           variant="subtle"
                           color={op.isAdmin ? 'orange' : 'violet'}
                           disabled={isSelf}
-                          loading={toggleAdminMu.isPending && toggleAdminMu.variables?.operatorId === op.operatorId}
+                          loading={
+                            toggleAdminMu.isPending &&
+                            toggleAdminMu.variables?.operatorId === op.operatorId
+                          }
                           onClick={() => toggleAdminMu.mutate(op)}
                         >
                           {op.isAdmin ? (
@@ -202,10 +246,7 @@ export function OperatorsPage() {
                         </ActionIcon>
                       </Tooltip>
                       <Tooltip label="重置密码">
-                        <ActionIcon
-                          variant="subtle"
-                          onClick={() => setPwTarget(op)}
-                        >
+                        <ActionIcon variant="subtle" onClick={() => setPwTarget(op)}>
                           <IconKey size={16} />
                         </ActionIcon>
                       </Tooltip>
@@ -238,13 +279,36 @@ export function OperatorsPage() {
         )}
       </Card>
 
+      <Group justify="space-between" align="center">
+        <Text size="xs" c="dimmed">
+          共 {operators.length} 位操作员
+          {search ? ` · 匹配 ${filtered.length} 位` : ''}
+        </Text>
+        <Button
+          variant="default"
+          onClick={() => fetchNextPage()}
+          disabled={!hasNextPage || isFetchingNextPage}
+          loading={isFetchingNextPage}
+        >
+          {hasNextPage ? '加载更多' : '没有更多了'}
+        </Button>
+      </Group>
+
       <CreateOperatorModal opened={createOpen} onClose={() => setCreateOpen(false)} />
 
-      <ChangePasswordModal
-        operator={pwTarget}
+      <Modal
         opened={pwTarget !== null}
         onClose={() => setPwTarget(null)}
-      />
+        title={`重置 ${pwTarget?.email ?? ''} 的密码`}
+        centered
+      >
+        <ChangePasswordForm
+          operator={pwTarget}
+          onCancel={() => setPwTarget(null)}
+          onSuccess={() => setPwTarget(null)}
+          submitLabel="更新"
+        />
+      </Modal>
 
       <ConfirmModal
         opened={toDelete !== null}
@@ -273,90 +337,5 @@ export function OperatorsPage() {
         confirmLabel="删除"
       />
     </Stack>
-  );
-}
-
-// ---- ChangePasswordModal (defined here to keep file count tight) ----
-
-type PwProps = {
-  operator: Operator | null;
-  opened: boolean;
-  onClose: () => void;
-};
-
-function ChangePasswordModal({ operator, opened, onClose }: PwProps) {
-  const form = useForm({
-    initialValues: { password: '', confirm: '' },
-    validate: {
-      password: (v) => (v.length >= 8 ? null : '密码至少 8 位'),
-      confirm: (v, vals) => (v === vals.password ? null : '两次输入的密码不一致'),
-    },
-  });
-
-  const mu = useMutation({
-    mutationFn: (vals: { password: string }) => {
-      if (!operator) return Promise.resolve();
-      return api.patch(`/v1/${operator.name}`, {
-        operator: { name: operator.name },
-        updateMask: 'password',
-        password: vals.password,
-      });
-    },
-    onSuccess: () => {
-      notifications.show({ color: 'green', title: '密码已更新', message: '已重置该操作员密码' });
-      form.reset();
-      onClose();
-    },
-    onError: (e: unknown) => {
-      const msg = e instanceof ApiError || e instanceof Error ? e.message : '请稍后重试';
-      notifications.show({ color: 'red', title: '更新失败', message: msg });
-    },
-  });
-
-  return (
-    <Modal
-      opened={opened}
-      onClose={() => {
-        if (!mu.isPending) {
-          form.reset();
-          onClose();
-        }
-      }}
-      title={`重置 ${operator?.email ?? ''} 的密码`}
-      centered
-    >
-      <form onSubmit={form.onSubmit((vals) => mu.mutate(vals))}>
-        <Stack>
-          <PasswordInput
-            required
-            label="新密码"
-            description="密码至少 8 位。"
-            {...form.getInputProps('password')}
-          />
-          <PasswordInput
-            required
-            label="重复新密码"
-            {...form.getInputProps('confirm')}
-          />
-          <Group justify="flex-end" mt="sm">
-            <Button
-              variant="default"
-              onClick={() => {
-                if (!mu.isPending) {
-                  form.reset();
-                  onClose();
-                }
-              }}
-              disabled={mu.isPending}
-            >
-              取消
-            </Button>
-            <Button type="submit" loading={mu.isPending}>
-              更新
-            </Button>
-          </Group>
-        </Stack>
-      </form>
-    </Modal>
   );
 }

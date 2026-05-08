@@ -68,6 +68,10 @@ export type LoginResponse = {
   operator: Operator;
 };
 
+export type WhoAmIResponse = {
+  operator: Operator;
+};
+
 // Pagination meta (gRPC-gateway emits camelCase).
 export type PageMeta = {
   nextPageToken?: string;

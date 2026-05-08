@@ -37,6 +37,7 @@ export function LoginPage() {
         token: resp.accessToken,
         email: resp.operator.email,
         isAdmin: resp.operator.isAdmin,
+        operatorId: resp.operator.operatorId,
       });
       nav('/dashboard');
     } catch (e) {

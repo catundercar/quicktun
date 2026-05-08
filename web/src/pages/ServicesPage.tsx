@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import {
   Alert,
   Badge,
   Button,
   Card,
+  CopyButton,
   Group,
   Loader,
   Modal,
@@ -19,7 +25,14 @@ import {
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
-import { IconEdit, IconPlus, IconTrash } from '@tabler/icons-react';
+import {
+  IconCheck,
+  IconCopy,
+  IconEdit,
+  IconPlus,
+  IconSearch,
+  IconTrash,
+} from '@tabler/icons-react';
 import { api, ApiError } from '../api/client';
 import type {
   ListProjectsResponse,
@@ -32,11 +45,34 @@ import { ConfirmModal } from '../components/ConfirmModal';
 import { EditServiceModal } from '../components/EditServiceModal';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
+const PAGE_SIZE = 50;
 
 function protoBadge(p: string) {
   if (p === 'PROTO_TCP') return <Badge color="blue">TCP</Badge>;
   if (p === 'PROTO_UDP') return <Badge color="violet">UDP</Badge>;
   return <Badge color="gray">{p || '-'}</Badge>;
+}
+
+// Suggest a sensible default --local-port for a forward. SSH/RDP/VNC have
+// well-known shadow ports (2222, 13389, 15900) that almost never collide, and
+// for everything else we offset the relay port by 10_000 to keep it out of
+// privileged range. Falls back to 10000 when no relay port has been assigned
+// yet so the snippet is still pasteable.
+function defaultLocalPort(svc: Service): number {
+  switch (svc.targetPort) {
+    case 22:
+      return 2222;
+    case 3389:
+      return 13389;
+    case 5900:
+      return 15900;
+    default:
+      return svc.relayPort ? svc.relayPort + 10000 : 10000;
+  }
+}
+
+function forwardCommand(svc: Service): string {
+  return `quicktun forward ${svc.name} --local-port ${defaultLocalPort(svc)}`;
 }
 
 export function ServicesPage() {
@@ -46,6 +82,7 @@ export function ServicesPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [toDelete, setToDelete] = useState<Service | null>(null);
   const [toEdit, setToEdit] = useState<Service | null>(null);
+  const [search, setSearch] = useState('');
 
   const projectsQ = useQuery({
     queryKey: ['projects'],
@@ -83,14 +120,35 @@ export function ServicesPage() {
     }
   }, [sites, projectSlug, siteSlug]);
 
-  const servicesQ = useQuery({
+  const servicesQ = useInfiniteQuery({
     queryKey: ['services', projectSlug, siteSlug],
-    queryFn: () =>
-      api.get<ListServicesResponse>(
-        `/v1/projects/${projectSlug}/sites/${siteSlug}/services`,
-      ),
     enabled: !!projectSlug && !!siteSlug,
+    initialPageParam: '',
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ 'page.pageSize': String(PAGE_SIZE) });
+      if (pageParam) params.set('page.pageToken', pageParam as string);
+      return api.get<ListServicesResponse>(
+        `/v1/projects/${projectSlug}/sites/${siteSlug}/services?${params.toString()}`,
+      );
+    },
+    getNextPageParam: (last) => last.page?.nextPageToken || undefined,
   });
+
+  const services: Service[] = useMemo(
+    () => servicesQ.data?.pages.flatMap((p) => p.services ?? []) ?? [],
+    [servicesQ.data],
+  );
+
+  const filteredServices = useMemo(() => {
+    if (!search.trim()) return services;
+    const q = search.trim().toLowerCase();
+    return services.filter(
+      (s) =>
+        s.displayName.toLowerCase().includes(q) ||
+        s.serviceId.toLowerCase().includes(q) ||
+        s.targetAddr.toLowerCase().includes(q),
+    );
+  }, [services, search]);
 
   const projectOptions = useMemo(
     () =>
@@ -187,8 +245,6 @@ export function ServicesPage() {
     );
   }
 
-  const services = servicesQ.data?.services ?? [];
-
   return (
     <Stack>
       <Group justify="space-between" wrap="wrap">
@@ -223,6 +279,13 @@ export function ServicesPage() {
         </Button>
       </Group>
 
+      <TextInput
+        placeholder="按名称、ID 或目标地址搜索"
+        leftSection={<IconSearch size={14} />}
+        value={search}
+        onChange={(e) => setSearch(e.currentTarget.value)}
+      />
+
       <Card withBorder padding={0} radius="md">
         {sitesQ.isLoading ? (
           <Group p="md">
@@ -241,14 +304,18 @@ export function ServicesPage() {
           <Alert color="red" m="md">
             {(servicesQ.error as Error).message}
           </Alert>
-        ) : services.length === 0 ? (
+        ) : filteredServices.length === 0 ? (
           <EmptyState
-            title="该站点下暂无服务"
-            hint="点击右上角创建服务，将在中继侧自动分配端口。"
+            title={search ? '未找到匹配的服务' : '该站点下暂无服务'}
+            hint={
+              search
+                ? '尝试调整搜索关键字。'
+                : '点击右上角创建服务，将在中继侧自动分配端口。'
+            }
           />
         ) : (
           <ResourceTable
-            data={services}
+            data={filteredServices}
             rowKey={(s) => s.name}
             columns={[
               {
@@ -279,9 +346,28 @@ export function ServicesPage() {
               {
                 key: 'actions',
                 header: '操作',
-                width: 140,
+                width: 180,
                 render: (s) => (
                   <Group gap="xs" wrap="nowrap">
+                    <CopyButton value={forwardCommand(s)} timeout={1500}>
+                      {({ copied, copy }) => (
+                        <Tooltip
+                          label={
+                            copied
+                              ? '已复制'
+                              : `复制 forward 命令（本地端口 ${defaultLocalPort(s)}）`
+                          }
+                        >
+                          <ActionIcon
+                            variant="subtle"
+                            color={copied ? 'teal' : 'gray'}
+                            onClick={copy}
+                          >
+                            {copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
+                          </ActionIcon>
+                        </Tooltip>
+                      )}
+                    </CopyButton>
                     <Tooltip label="编辑服务">
                       <ActionIcon
                         variant="subtle"
@@ -306,6 +392,21 @@ export function ServicesPage() {
           />
         )}
       </Card>
+
+      <Group justify="space-between" align="center">
+        <Text size="xs" c="dimmed">
+          共 {services.length} 个服务
+          {search ? ` · 匹配 ${filteredServices.length} 个` : ''}
+        </Text>
+        <Button
+          variant="default"
+          onClick={() => servicesQ.fetchNextPage()}
+          disabled={!servicesQ.hasNextPage || servicesQ.isFetchingNextPage}
+          loading={servicesQ.isFetchingNextPage}
+        >
+          {servicesQ.hasNextPage ? '加载更多' : '没有更多了'}
+        </Button>
+      </Group>
 
       {/* Create modal */}
       <Modal

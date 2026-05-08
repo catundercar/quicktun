@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import {
   Alert,
   Badge,
@@ -28,6 +33,7 @@ import {
   IconEdit,
   IconKey,
   IconPlus,
+  IconSearch,
   IconTrash,
 } from '@tabler/icons-react';
 import { api, ApiError } from '../api/client';
@@ -45,6 +51,7 @@ import { InstallCommandModal } from '../components/InstallCommandModal';
 import { formatTime } from '../utils/format';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
+const PAGE_SIZE = 50;
 
 function statusBadge(status: string) {
   if (status === 'SITE_STATUS_ONLINE') return <Badge color="green">在线</Badge>;
@@ -64,6 +71,7 @@ export function SitesPage() {
   const [rotatedToken, setRotatedToken] = useState<string | null>(null);
   const [toEdit, setToEdit] = useState<Site | null>(null);
   const [toInstall, setToInstall] = useState<Site | null>(null);
+  const [search, setSearch] = useState('');
 
   // Load project list for the selector.
   const projectsQ = useQuery({
@@ -90,12 +98,35 @@ export function SitesPage() {
     }
   }, [projectSlug, searchParams, setSearchParams]);
 
-  const sitesQ = useQuery({
+  const sitesQ = useInfiniteQuery({
     queryKey: ['sites', projectSlug],
-    queryFn: () =>
-      api.get<ListSitesResponse>(`/v1/projects/${projectSlug}/sites`),
     enabled: !!projectSlug,
+    initialPageParam: '',
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ 'page.pageSize': String(PAGE_SIZE) });
+      if (pageParam) params.set('page.pageToken', pageParam as string);
+      return api.get<ListSitesResponse>(
+        `/v1/projects/${projectSlug}/sites?${params.toString()}`,
+      );
+    },
+    getNextPageParam: (last) => last.page?.nextPageToken || undefined,
   });
+
+  const sites: Site[] = useMemo(
+    () => sitesQ.data?.pages.flatMap((p) => p.sites ?? []) ?? [],
+    [sitesQ.data],
+  );
+
+  const filteredSites = useMemo(() => {
+    if (!search.trim()) return sites;
+    const q = search.trim().toLowerCase();
+    return sites.filter(
+      (s) =>
+        s.displayName.toLowerCase().includes(q) ||
+        s.siteId.toLowerCase().includes(q) ||
+        (s.hostname ?? '').toLowerCase().includes(q),
+    );
+  }, [sites, search]);
 
   const projectOptions = useMemo(
     () =>
@@ -187,8 +218,6 @@ export function SitesPage() {
     );
   }
 
-  const sites = sitesQ.data?.sites ?? [];
-
   return (
     <Stack>
       <Group justify="space-between" wrap="wrap">
@@ -213,6 +242,13 @@ export function SitesPage() {
         </Button>
       </Group>
 
+      <TextInput
+        placeholder="按显示名、ID 或主机名搜索"
+        leftSection={<IconSearch size={14} />}
+        value={search}
+        onChange={(e) => setSearch(e.currentTarget.value)}
+      />
+
       <Card withBorder padding={0} radius="md">
         {sitesQ.isLoading ? (
           <Group p="md">
@@ -222,14 +258,18 @@ export function SitesPage() {
           <Alert color="red" m="md">
             {(sitesQ.error as Error).message}
           </Alert>
-        ) : sites.length === 0 ? (
+        ) : filteredSites.length === 0 ? (
           <EmptyState
-            title="该项目下暂无站点"
-            hint="点击右上角创建站点，并将生成的 agent token 部署到目标主机。"
+            title={search ? '未找到匹配的站点' : '该项目下暂无站点'}
+            hint={
+              search
+                ? '尝试调整搜索关键字。'
+                : '点击右上角创建站点，并将生成的 agent token 部署到目标主机。'
+            }
           />
         ) : (
           <ResourceTable
-            data={sites}
+            data={filteredSites}
             rowKey={(s) => s.name}
             columns={[
               { key: 'siteId', header: '名称', render: (s) => <Text ff="monospace">{s.siteId}</Text> },
@@ -299,6 +339,21 @@ export function SitesPage() {
           />
         )}
       </Card>
+
+      <Group justify="space-between" align="center">
+        <Text size="xs" c="dimmed">
+          共 {sites.length} 个站点
+          {search ? ` · 匹配 ${filteredSites.length} 个` : ''}
+        </Text>
+        <Button
+          variant="default"
+          onClick={() => sitesQ.fetchNextPage()}
+          disabled={!sitesQ.hasNextPage || sitesQ.isFetchingNextPage}
+          loading={sitesQ.isFetchingNextPage}
+        >
+          {sitesQ.hasNextPage ? '加载更多' : '没有更多了'}
+        </Button>
+      </Group>
 
       {/* Create modal */}
       <Modal
