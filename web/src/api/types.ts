@@ -93,3 +93,10 @@ export type RotateAgentTokenResponse = {
   token: string;
   expireTime?: string;
 };
+
+// Response of GET /v1/{name=projects/*/sites/*}:installCommand
+export type InstallCommandResponse = {
+  command: string;
+  token: string;
+  expireTime?: string;
+};

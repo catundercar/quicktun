@@ -19,7 +19,7 @@ import {
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
-import { IconPlus, IconTrash } from '@tabler/icons-react';
+import { IconEdit, IconPlus, IconTrash } from '@tabler/icons-react';
 import { api, ApiError } from '../api/client';
 import type {
   ListProjectsResponse,
@@ -29,6 +29,7 @@ import type {
 } from '../api/types';
 import { ResourceTable, EmptyState } from '../components/ResourceTable';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { EditServiceModal } from '../components/EditServiceModal';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
 
@@ -44,6 +45,7 @@ export function ServicesPage() {
   const [siteSlug, setSiteSlug] = useState<string>('');
   const [createOpen, setCreateOpen] = useState(false);
   const [toDelete, setToDelete] = useState<Service | null>(null);
+  const [toEdit, setToEdit] = useState<Service | null>(null);
 
   const projectsQ = useQuery({
     queryKey: ['projects'],
@@ -277,17 +279,27 @@ export function ServicesPage() {
               {
                 key: 'actions',
                 header: '操作',
-                width: 100,
+                width: 140,
                 render: (s) => (
-                  <Tooltip label="删除服务">
-                    <ActionIcon
-                      variant="subtle"
-                      color="red"
-                      onClick={() => setToDelete(s)}
-                    >
-                      <IconTrash size={16} />
-                    </ActionIcon>
-                  </Tooltip>
+                  <Group gap="xs" wrap="nowrap">
+                    <Tooltip label="编辑服务">
+                      <ActionIcon
+                        variant="subtle"
+                        onClick={() => setToEdit(s)}
+                      >
+                        <IconEdit size={16} />
+                      </ActionIcon>
+                    </Tooltip>
+                    <Tooltip label="删除服务">
+                      <ActionIcon
+                        variant="subtle"
+                        color="red"
+                        onClick={() => setToDelete(s)}
+                      >
+                        <IconTrash size={16} />
+                      </ActionIcon>
+                    </Tooltip>
+                  </Group>
                 ),
               },
             ]}
@@ -369,6 +381,15 @@ export function ServicesPage() {
           </Stack>
         </form>
       </Modal>
+
+      {/* Edit modal */}
+      <EditServiceModal
+        service={toEdit}
+        opened={toEdit !== null}
+        onClose={() => setToEdit(null)}
+        projectSlug={projectSlug}
+        siteSlug={siteSlug}
+      />
 
       {/* Delete confirm */}
       <ConfirmModal

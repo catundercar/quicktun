@@ -18,11 +18,12 @@ import {
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
-import { IconPlus, IconTrash, IconArrowRight } from '@tabler/icons-react';
+import { IconPlus, IconTrash, IconArrowRight, IconEdit } from '@tabler/icons-react';
 import { api, ApiError } from '../api/client';
 import type { ListProjectsResponse, Project } from '../api/types';
 import { ResourceTable, EmptyState } from '../components/ResourceTable';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { EditProjectModal } from '../components/EditProjectModal';
 import { formatTime } from '../utils/format';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
@@ -38,6 +39,7 @@ export function ProjectsPage() {
   const nav = useNavigate();
   const [createOpen, setCreateOpen] = useState(false);
   const [toDelete, setToDelete] = useState<Project | null>(null);
+  const [toEdit, setToEdit] = useState<Project | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['projects'],
@@ -145,7 +147,7 @@ export function ProjectsPage() {
               {
                 key: 'actions',
                 header: '操作',
-                width: 160,
+                width: 200,
                 render: (p) => (
                   <Group gap="xs" wrap="nowrap">
                     <Tooltip label="查看该项目下的站点">
@@ -157,6 +159,17 @@ export function ProjectsPage() {
                         }}
                       >
                         <IconArrowRight size={16} />
+                      </ActionIcon>
+                    </Tooltip>
+                    <Tooltip label="编辑项目">
+                      <ActionIcon
+                        variant="subtle"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setToEdit(p);
+                        }}
+                      >
+                        <IconEdit size={16} />
                       </ActionIcon>
                     </Tooltip>
                     <Tooltip label="删除项目">
@@ -231,6 +244,13 @@ export function ProjectsPage() {
           </Stack>
         </form>
       </Modal>
+
+      {/* Edit modal */}
+      <EditProjectModal
+        project={toEdit}
+        opened={toEdit !== null}
+        onClose={() => setToEdit(null)}
+      />
 
       {/* Delete confirm */}
       <ConfirmModal

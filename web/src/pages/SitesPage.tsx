@@ -24,6 +24,8 @@ import { notifications } from '@mantine/notifications';
 import {
   IconCheck,
   IconCopy,
+  IconDownload,
+  IconEdit,
   IconKey,
   IconPlus,
   IconTrash,
@@ -38,6 +40,8 @@ import type {
 } from '../api/types';
 import { ResourceTable, EmptyState } from '../components/ResourceTable';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { EditSiteModal } from '../components/EditSiteModal';
+import { InstallCommandModal } from '../components/InstallCommandModal';
 import { formatTime } from '../utils/format';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
@@ -58,6 +62,8 @@ export function SitesPage() {
   const [toDelete, setToDelete] = useState<Site | null>(null);
   const [toRotate, setToRotate] = useState<Site | null>(null);
   const [rotatedToken, setRotatedToken] = useState<string | null>(null);
+  const [toEdit, setToEdit] = useState<Site | null>(null);
+  const [toInstall, setToInstall] = useState<Site | null>(null);
 
   // Load project list for the selector.
   const projectsQ = useQuery({
@@ -250,9 +256,25 @@ export function SitesPage() {
               {
                 key: 'actions',
                 header: '操作',
-                width: 140,
+                width: 220,
                 render: (s) => (
                   <Group gap="xs" wrap="nowrap">
+                    <Tooltip label="显示安装命令">
+                      <ActionIcon
+                        variant="subtle"
+                        onClick={() => setToInstall(s)}
+                      >
+                        <IconDownload size={16} />
+                      </ActionIcon>
+                    </Tooltip>
+                    <Tooltip label="编辑站点">
+                      <ActionIcon
+                        variant="subtle"
+                        onClick={() => setToEdit(s)}
+                      >
+                        <IconEdit size={16} />
+                      </ActionIcon>
+                    </Tooltip>
                     <Tooltip label="重新生成 agent token">
                       <ActionIcon
                         variant="subtle"
@@ -329,6 +351,21 @@ export function SitesPage() {
           </Stack>
         </form>
       </Modal>
+
+      {/* Edit modal */}
+      <EditSiteModal
+        site={toEdit}
+        opened={toEdit !== null}
+        onClose={() => setToEdit(null)}
+        projectSlug={projectSlug}
+      />
+
+      {/* Install command modal */}
+      <InstallCommandModal
+        siteName={toInstall?.name ?? null}
+        opened={toInstall !== null}
+        onClose={() => setToInstall(null)}
+      />
 
       {/* Delete confirm */}
       <ConfirmModal
