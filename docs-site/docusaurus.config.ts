@@ -1,6 +1,8 @@
 import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
+// @ts-expect-error — no type declarations shipped by this package
+import searchLocal from '@easyops-cn/docusaurus-search-local';
 
 const config: Config = {
   title: 'quicktun',
@@ -45,6 +47,21 @@ const config: Config = {
           customCss: './src/css/custom.css',
         },
       } satisfies Preset.Options,
+    ],
+  ],
+
+  themes: [
+    [
+      searchLocal,
+      {
+        hashed: true,
+        language: ['en', 'zh'],
+        indexBlog: false,
+        indexPages: true,
+        docsRouteBasePath: '/docs',
+        searchResultLimits: 10,
+        searchResultContextMaxLength: 50,
+      },
     ],
   ],
 
