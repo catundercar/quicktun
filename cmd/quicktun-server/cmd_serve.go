@@ -54,6 +54,8 @@ func serveCmd() *cobra.Command {
 				GRPCListen:          cfg.ControlPlane.GRPCListen,
 				HTTPListen:          cfg.ControlPlane.HTTPListen,
 				RelayAddr:           cfg.ControlPlane.RelayAddr,
+				PublicBaseURL:       cfg.ControlPlane.PublicBaseURL,
+				PublicGRPCEndpoint:  cfg.ControlPlane.PublicGRPCEndpoint,
 				RatholeBinary:       cfg.Backend.RatholeBinary,
 				RatholeArgs:         cfg.Backend.RatholeArgs,
 				RatholeConfigDir:    cfg.Backend.RatholeConfigDir,

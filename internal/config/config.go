@@ -59,6 +59,24 @@ type ControlPlaneConfig struct {
 	GRPCListen string `mapstructure:"grpc_listen"`
 	HTTPListen string `mapstructure:"http_listen"`
 	RelayAddr  string `mapstructure:"relay_addr"`
+
+	// PublicBaseURL is the scheme+host[:port] operators reach the control
+	// plane HTTP gateway at. Used to render install-command URLs that point
+	// back at /install/agent.sh on this server.
+	//
+	// Falls back to "https://" + RelayAddr if empty (legacy behaviour).
+	// Set explicitly in dev (e.g. "http://127.0.0.1:9091") or behind nginx
+	// (e.g. "https://control.example.com").
+	PublicBaseURL string `mapstructure:"public_base_url"`
+
+	// PublicGRPCEndpoint is the host:port the agent should dial for the
+	// control-plane gRPC service (Bootstrap / Heartbeat). Embedded in
+	// install commands as QT_ENDPOINT.
+	//
+	// Falls back to RelayAddr if empty (legacy behaviour). In production
+	// this is typically the public DNS name terminating TLS in nginx, e.g.
+	// "control.example.com:443".
+	PublicGRPCEndpoint string `mapstructure:"public_grpc_endpoint"`
 }
 
 // DatabaseConfig describes the persistence layer.

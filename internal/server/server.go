@@ -34,6 +34,7 @@ import (
 	"github.com/tulip/quicktun/internal/metrics"
 	"github.com/tulip/quicktun/internal/notify"
 	"github.com/tulip/quicktun/internal/relay"
+	"github.com/tulip/quicktun/internal/server/installscripts"
 	"github.com/tulip/quicktun/internal/server/webui"
 	"github.com/tulip/quicktun/internal/sweeper"
 )
@@ -45,6 +46,8 @@ type Config struct {
 	GRPCListen          string
 	HTTPListen          string
 	RelayAddr           string
+	PublicBaseURL       string // see config.ControlPlaneConfig.PublicBaseURL
+	PublicGRPCEndpoint  string // see config.ControlPlaneConfig.PublicGRPCEndpoint
 	RatholeBinary       string
 	RatholeArgs         []string
 	RatholeConfigDir    string
@@ -149,6 +152,10 @@ func New(cfg Config) (*Server, error) {
 		cfg.RelayAddr,
 		cfg.Logger,
 		mgr,
+		grpcsvc.SiteServiceOptions{
+			PublicBaseURL:      cfg.PublicBaseURL,
+			PublicGRPCEndpoint: cfg.PublicGRPCEndpoint,
+		},
 	)
 	quicktunv1.RegisterSiteServiceServer(gs, siteSvc)
 
@@ -296,6 +303,8 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	// Routing layout (longest-prefix wins on http.ServeMux):
 	//   /healthz    → health probe (Plan 11)
+	//   /metrics    → Prometheus collectors
+	//   /install/*  → embedded agent install scripts (curl|bash one-liners)
 	//   /v1/*       → grpc-gateway (existing JSON API)
 	//   everything else → embedded SPA (with index.html fallback for
 	//                     client-side routes like /dashboard, /projects)
@@ -306,6 +315,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// a dedicated listener below — Prometheus operators who'd rather not
 	// expose /metrics through the public gateway can scrape that instead.
 	rootMux.Handle("/metrics", metrics.Handler(s.metricsRegistry))
+	rootMux.Handle("/install/", installscripts.Handler())
 	rootMux.Handle("/v1/", gatewayMux)
 	rootMux.Handle("/", webui.Handler())
 

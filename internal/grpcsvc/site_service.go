@@ -23,18 +23,30 @@ import (
 // SiteService implements quicktunv1.SiteServiceServer.
 type SiteService struct {
 	quicktunv1.UnimplementedSiteServiceServer
-	projects  *dao.ProjectDAO
-	sites     *dao.SiteDAO
-	tokens    *dao.SiteAgentTokenDAO
-	audit     *audit.Writer
-	lg        *zap.Logger
-	relayAddr string
-	relay     RelayManager
+	projects *dao.ProjectDAO
+	sites    *dao.SiteDAO
+	tokens   *dao.SiteAgentTokenDAO
+	audit    *audit.Writer
+	lg       *zap.Logger
+	// relayAddr is the legacy fallback for both publicBaseURL and
+	// publicGRPCEndpoint when those aren't configured explicitly.
+	relayAddr          string
+	publicBaseURL      string // e.g. "https://control.example.com"; empty → "https://"+relayAddr
+	publicGRPCEndpoint string // e.g. "control.example.com:443";   empty → relayAddr
+	relay              RelayManager
+}
+
+// SiteServiceOptions carries optional construction parameters for
+// NewSiteService. Both fields default to relay-derived values when empty;
+// see ControlPlaneConfig docs in internal/config for semantics.
+type SiteServiceOptions struct {
+	PublicBaseURL      string
+	PublicGRPCEndpoint string
 }
 
 // NewSiteService constructs a SiteService. If lg is nil a no-op logger is
 // substituted; if relay is nil a no-op manager is substituted.
-func NewSiteService(projects *dao.ProjectDAO, sites *dao.SiteDAO, tokens *dao.SiteAgentTokenDAO, audit *audit.Writer, relayAddr string, lg *zap.Logger, relay RelayManager) *SiteService {
+func NewSiteService(projects *dao.ProjectDAO, sites *dao.SiteDAO, tokens *dao.SiteAgentTokenDAO, audit *audit.Writer, relayAddr string, lg *zap.Logger, relay RelayManager, opts ...SiteServiceOptions) *SiteService {
 	if relayAddr == "" {
 		relayAddr = "relay.example.com:443"
 	}
@@ -44,9 +56,15 @@ func NewSiteService(projects *dao.ProjectDAO, sites *dao.SiteDAO, tokens *dao.Si
 	if relay == nil {
 		relay = noopRelayManager{}
 	}
+	var o SiteServiceOptions
+	if len(opts) > 0 {
+		o = opts[0]
+	}
 	return &SiteService{
 		projects: projects, sites: sites, tokens: tokens, audit: audit,
 		lg: lg, relayAddr: relayAddr, relay: relay,
+		publicBaseURL:      o.PublicBaseURL,
+		publicGRPCEndpoint: o.PublicGRPCEndpoint,
 	}
 }
 
@@ -400,15 +418,29 @@ func (s *SiteService) GetSiteInstallCommand(ctx context.Context, req *quicktunv1
 		return nil, status.Error(codes.Internal, "issue failed")
 	}
 
+	// baseURL is where the agent.sh / agent.ps1 install scripts live (HTTP
+	// gateway public URL). grpcEndpoint is what the agent should dial for
+	// the control-plane gRPC service. They differ in production: nginx
+	// terminates HTTPS for /install/* on one hostname, gRPC on another (or
+	// the same hostname on a different port).
+	baseURL := s.publicBaseURL
+	if baseURL == "" {
+		baseURL = "https://" + s.relayAddr
+	}
+	grpcEndpoint := s.publicGRPCEndpoint
+	if grpcEndpoint == "" {
+		grpcEndpoint = s.relayAddr
+	}
+
 	var cmd string
 	switch osKind {
 	case "linux":
-		cmd = "curl -fsSL https://" + s.relayAddr + "/install/agent.sh | " +
-			"QT_TOKEN=" + raw + " QT_ENDPOINT=" + s.relayAddr + " bash"
+		cmd = "curl -fsSL " + baseURL + "/install/agent.sh | " +
+			"QT_TOKEN=" + raw + " QT_ENDPOINT=" + grpcEndpoint + " bash"
 	case "windows":
 		cmd = `$env:QT_TOKEN="` + raw + `"; ` +
-			`$env:QT_ENDPOINT="` + s.relayAddr + `"; ` +
-			`iwr -useb https://` + s.relayAddr + `/install/agent.ps1 | iex`
+			`$env:QT_ENDPOINT="` + grpcEndpoint + `"; ` +
+			`iwr -useb ` + baseURL + `/install/agent.ps1 | iex`
 	}
 
 	_ = s.audit.Log(ctx, audit.Entry{

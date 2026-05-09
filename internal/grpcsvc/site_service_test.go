@@ -505,6 +505,52 @@ func TestSiteServiceCallsRelayRefreshOnMutations(t *testing.T) {
 	require.Empty(t, rec.removed)
 }
 
+func TestGetSiteInstallCommandFallsBackToRelayAddr(t *testing.T) {
+	// With no PublicBaseURL/PublicGRPCEndpoint configured, the legacy
+	// "https://" + relayAddr behaviour applies.
+	db := openTestDB(t)
+	mkProjAndSite(t, db, "p1", "fallback-target")
+	svc := newSiteService(t, db)
+
+	resp, err := svc.GetSiteInstallCommand(adminCtx(t, db), &quicktunv1.GetSiteInstallCommandRequest{
+		Name: "projects/p1/sites/fallback-target",
+		Os:   "linux",
+	})
+	require.NoError(t, err)
+	require.Contains(t, resp.Command, "https://test-relay.example.com:443/install/agent.sh")
+	require.Contains(t, resp.Command, "QT_ENDPOINT=test-relay.example.com:443")
+}
+
+func TestGetSiteInstallCommandUsesPublicURLs(t *testing.T) {
+	// When PublicBaseURL + PublicGRPCEndpoint are set, both override the
+	// relayAddr-derived defaults.
+	db := openTestDB(t)
+	mkProjAndSite(t, db, "p1", "public-target")
+	svc := grpcsvc.NewSiteService(
+		dao.NewProjectDAO(db),
+		dao.NewSiteDAO(db),
+		dao.NewSiteAgentTokenDAO(db),
+		audit.NewWriter(db),
+		"test-relay.example.com:443",
+		zap.NewNop(),
+		nil,
+		grpcsvc.SiteServiceOptions{
+			PublicBaseURL:      "http://127.0.0.1:9091",
+			PublicGRPCEndpoint: "127.0.0.1:9090",
+		},
+	)
+
+	resp, err := svc.GetSiteInstallCommand(adminCtx(t, db), &quicktunv1.GetSiteInstallCommandRequest{
+		Name: "projects/p1/sites/public-target",
+		Os:   "linux",
+	})
+	require.NoError(t, err)
+	require.Contains(t, resp.Command, "http://127.0.0.1:9091/install/agent.sh")
+	require.Contains(t, resp.Command, "QT_ENDPOINT=127.0.0.1:9090")
+	// And the legacy https://test-relay... must NOT appear.
+	require.NotContains(t, resp.Command, "https://test-relay.example.com")
+}
+
 func TestGetSiteInstallCommandRejectsBadOS(t *testing.T) {
 	db := openTestDB(t)
 	mkProjAndSite(t, db, "p1", "bad-os-target")

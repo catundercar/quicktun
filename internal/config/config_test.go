@@ -103,6 +103,37 @@ database:
 	require.Equal(t, "relay.example.com:443", cfg.ControlPlane.RelayAddr)
 }
 
+func TestPublicURLsDefaultEmpty(t *testing.T) {
+	// PublicBaseURL and PublicGRPCEndpoint default to empty so SiteService
+	// falls back to RelayAddr-derived URLs (legacy behaviour).
+	yaml := `
+database:
+  dsn: ":memory:"
+`
+	path := filepath.Join(t.TempDir(), "server.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o600))
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "", cfg.ControlPlane.PublicBaseURL)
+	require.Equal(t, "", cfg.ControlPlane.PublicGRPCEndpoint)
+}
+
+func TestPublicURLsLoaded(t *testing.T) {
+	yaml := `
+control_plane:
+  public_base_url: http://127.0.0.1:9091
+  public_grpc_endpoint: 127.0.0.1:9090
+database:
+  dsn: ":memory:"
+`
+	path := filepath.Join(t.TempDir(), "server.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o600))
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "http://127.0.0.1:9091", cfg.ControlPlane.PublicBaseURL)
+	require.Equal(t, "127.0.0.1:9090", cfg.ControlPlane.PublicGRPCEndpoint)
+}
+
 func TestBackendDefaults(t *testing.T) {
 	yaml := `
 database:
