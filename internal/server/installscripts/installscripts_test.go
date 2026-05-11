@@ -36,6 +36,26 @@ func TestHandlerServesAgentScript(t *testing.T) {
 	require.NotContains(t, s, ". lib.sh")
 }
 
+func TestHandlerServesAgentPs1(t *testing.T) {
+	srv := httptest.NewServer(installscripts.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/install/agent.ps1")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	s := string(body)
+	require.Contains(t, s, "#Requires -RunAsAdministrator")
+	require.Contains(t, s, "QT_TOKEN")
+	require.Contains(t, s, "QT_ENDPOINT")
+	require.Contains(t, s, "service-run")
+	// Self-contained — must not source any sibling lib.
+	require.NotContains(t, s, ". .\\lib.ps1")
+}
+
 func TestHandlerReturns404ForUnknownFile(t *testing.T) {
 	srv := httptest.NewServer(installscripts.Handler())
 	defer srv.Close()

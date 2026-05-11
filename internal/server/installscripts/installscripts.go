@@ -13,12 +13,11 @@ import (
 	"strings"
 )
 
-// agent.sh is the only script today; agent.ps1 is intentionally absent
-// (the existing deploy/windows/install-agent.ps1 references local relative
-// paths and isn't safe to iwr|iex without a rewrite). When Windows support
-// lands, drop the file in this directory and add it to the embed line.
+// agent.sh covers Linux/macOS; agent.ps1 is the iwr|iex-safe Windows
+// counterpart. Both are self-contained — no shared lib sourcing — so they
+// work when fetched standalone via the web admin's install-command modal.
 //
-//go:embed agent.sh
+//go:embed agent.sh agent.ps1
 var fsys embed.FS
 
 // Handler returns an http.Handler serving /install/<file>. Requests that
